@@ -95,6 +95,7 @@ async function handleMessage(
 
   if (message.channelId === services.config.discord.moviesChannelId) {
     if (!hasReadableContent(message)) {
+      logRequest("message_content_missing", message, { kind: "movie" });
       await replyWithMissingMessageContentHelp(message);
       return;
     }
@@ -105,6 +106,7 @@ async function handleMessage(
 
   if (message.channelId === services.config.discord.showsChannelId) {
     if (!hasReadableContent(message)) {
+      logRequest("message_content_missing", message, { kind: "show" });
       await replyWithMissingMessageContentHelp(message);
       return;
     }
@@ -120,6 +122,7 @@ async function handleMovieRequest(
 ): Promise<void> {
   const parsed = parseMovieRequest(message.content);
   if (!parsed.ok) {
+    logRequest("movie_parse_failed", message, { error: parsed.error });
     await safeReply(message, parsed.error);
     return;
   }
@@ -129,21 +132,43 @@ async function handleMovieRequest(
     services.config.radarr.qualityMap,
     services.config.radarr.defaultQuality
   );
+  logRequest("movie_search_started", message, {
+    title: parsed.value.title,
+    year: parsed.value.year,
+    quality
+  });
   const status = await message.reply(`Searching for ${parsed.value.title}...`);
   const matches = await services.radarr.lookupMovies(parsed.value.title, parsed.value.year);
+  logRequest("movie_lookup_completed", message, {
+    title: parsed.value.title,
+    year: parsed.value.year,
+    matchCount: matches.length,
+    matches: matches.map(formatMovieChoice)
+  });
 
   if (matches.length > 1 || (matches.length > 0 && parsed.value.year === undefined)) {
+    logRequest("movie_selection_prompted", message, {
+      title: parsed.value.title,
+      year: parsed.value.year,
+      matchCount: matches.length
+    });
     await promptForMovieSelection(status, message.author.id, matches, quality, pendingSelections);
     return;
   }
 
   const match = matches[0];
   if (!match) {
+    logRequest("movie_lookup_empty", message, {
+      title: parsed.value.title,
+      year: parsed.value.year
+    });
     await status.edit(`Unable to identify ${parsed.value.title}`);
     return;
   }
 
+  logRequest("movie_add_search_started", message, { match: formatMovieChoice(match), quality });
   const result = await services.radarr.addLookupAndSearch(match, quality);
+  logRequest("movie_add_search_completed", message, result);
   await status.edit(formatRadarrResult(result));
 }
 
@@ -154,6 +179,7 @@ async function handleShowRequest(
 ): Promise<void> {
   const parsed = parseShowRequest(message.content);
   if (!parsed.ok) {
+    logRequest("show_parse_failed", message, { error: parsed.error });
     await safeReply(message, parsed.error);
     return;
   }
@@ -172,20 +198,45 @@ async function handleShowRequest(
           seasonNumber: parsed.value.seasonNumber || 1,
           monitorWholeShow: parsed.value.monitorWholeShow
         };
+  logRequest("show_search_started", message, {
+    title: parsed.value.title,
+    year: parsed.value.year,
+    quality,
+    searchScope
+  });
   const matches = await services.sonarr.lookupSeries(parsed.value.title, parsed.value.year);
+  logRequest("show_lookup_completed", message, {
+    title: parsed.value.title,
+    year: parsed.value.year,
+    matchCount: matches.length,
+    matches: matches.map(formatShowChoice)
+  });
 
   if (matches.length > 1) {
+    logRequest("show_selection_prompted", message, {
+      title: parsed.value.title,
+      year: parsed.value.year,
+      matchCount: matches.length,
+      searchScope
+    });
     await promptForShowSelection(status, message.author.id, matches, quality, searchScope, pendingSelections);
     return;
   }
 
   const match = matches[0];
   if (!match) {
+    logRequest("show_lookup_empty", message, {
+      title: parsed.value.title,
+      year: parsed.value.year,
+      searchScope
+    });
     await status.edit(`Unable to identify ${parsed.value.title}`);
     return;
   }
 
+  logRequest("show_add_search_started", message, { match: formatShowChoice(match), quality, searchScope });
   const result = await services.sonarr.addLookupAndSearch(match, quality, searchScope);
+  logRequest("show_add_search_completed", message, result);
   await status.edit(formatSonarrResult(result));
 }
 
@@ -249,15 +300,28 @@ async function handleSelectionReaction(
 
   if (pending.kind === "movie") {
     const match = pending.matches[selectedIndex];
+    logSelection("movie_selection_received", fullReaction.message.id, user.id, {
+      selection: selectedIndex + 1,
+      match: formatMovieChoice(match),
+      quality: pending.quality
+    });
     await fullReaction.message.edit(`Searching for ${formatMovieChoice(match)}...`);
     const result = await services.radarr.addLookupAndSearch(match, pending.quality);
+    logSelection("movie_selection_completed", fullReaction.message.id, user.id, result);
     await fullReaction.message.edit(formatRadarrResult(result));
     return;
   }
 
   const match = pending.matches[selectedIndex];
+  logSelection("show_selection_received", fullReaction.message.id, user.id, {
+    selection: selectedIndex + 1,
+    match: formatShowChoice(match),
+    quality: pending.quality,
+    searchScope: pending.searchScope
+  });
   await fullReaction.message.edit(`Searching for ${formatShowChoice(match)}...`);
   const result = await services.sonarr.addLookupAndSearch(match, pending.quality, pending.searchScope);
+  logSelection("show_selection_completed", fullReaction.message.id, user.id, result);
   await fullReaction.message.edit(formatSonarrResult(result));
 }
 
@@ -341,6 +405,34 @@ async function replyWithMissingMessageContentHelp(message: Message): Promise<voi
   await safeReply(
     message,
     "I can't read that message yet. Enable the Message Content Intent for this bot in the Discord Developer Portal, then restart me."
+  );
+}
+
+function logRequest(event: string, message: Message, details: Record<string, unknown>): void {
+  console.info(
+    `[request] ${JSON.stringify({
+      event,
+      messageId: message.id,
+      channelId: message.channelId,
+      userId: message.author.id,
+      ...details
+    })}`
+  );
+}
+
+function logSelection(
+  event: string,
+  messageId: string,
+  userId: string | undefined,
+  details: Record<string, unknown>
+): void {
+  console.info(
+    `[request] ${JSON.stringify({
+      event,
+      messageId,
+      userId,
+      ...details
+    })}`
   );
 }
 
