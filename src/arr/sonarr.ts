@@ -21,11 +21,19 @@ type SonarrSeries = SonarrSeriesLookup & {
 
 type SonarrHistoryPage = {
   records: Array<{
+    id?: number;
     eventType: string;
     date: string;
     seriesId: number;
+    sourceTitle?: string;
+    series?: {
+      title?: string;
+      year?: number;
+    };
     episode?: {
       seasonNumber?: number;
+      episodeNumber?: number;
+      title?: string;
     };
   }>;
 };
@@ -47,6 +55,16 @@ export type SonarrSearchResult =
   | { status: "already_exists"; title: string }
   | { status: "found"; title: string; seasonNumber?: number }
   | { status: "not_found"; title: string; seasonNumber?: number };
+
+export type SonarrRelease = {
+  id: string;
+  title: string;
+  year?: number;
+  seasonNumber?: number;
+  episodeNumber?: number;
+  episodeTitle?: string;
+  date: Date;
+};
 
 export class SonarrClient {
   private readonly http: ArrHttpClient;
@@ -98,6 +116,28 @@ export class SonarrClient {
       title: series.title,
       seasonNumber: searchScope.scope === "season" ? searchScope.seasonNumber : undefined
     };
+  }
+
+  async getImportedEpisodesSince(since: Date): Promise<SonarrRelease[]> {
+    const history = await this.http.get<SonarrHistoryPage>("/api/v3/history", {
+      page: 1,
+      pageSize: 100,
+      sortKey: "date",
+      sortDirection: "descending"
+    });
+
+    return history.records
+      .filter((record) => this.isEpisodeImportEvent(record.eventType))
+      .filter((record) => new Date(record.date) > since)
+      .map((record) => ({
+        id: String(record.id ?? `${record.seriesId}:${record.episode?.seasonNumber}:${record.episode?.episodeNumber}:${record.date}`),
+        title: record.series?.title || record.sourceTitle || `Show ${record.seriesId}`,
+        year: record.series?.year,
+        seasonNumber: record.episode?.seasonNumber,
+        episodeNumber: record.episode?.episodeNumber,
+        episodeTitle: record.episode?.title,
+        date: new Date(record.date)
+      }));
   }
 
   private async lookupSeries(title: string, year: number): Promise<SonarrSeriesLookup> {
@@ -188,7 +228,7 @@ export class SonarrClient {
 
       const grabbed = history.records.some((record) => {
         if (record.seriesId !== seriesId || new Date(record.date) < startedAt) return false;
-        if (!["grabbed", "episodeFileImported", "downloadFolderImported"].includes(record.eventType)) {
+        if (!["grabbed", ...episodeImportEvents].includes(record.eventType)) {
           return false;
         }
         return this.recordMatchesScope(record.episode?.seasonNumber, searchScope);
@@ -212,4 +252,10 @@ export class SonarrClient {
     if (searchScope.scope === "full") return true;
     return seasonNumber === undefined || seasonNumber === searchScope.seasonNumber;
   }
+
+  private isEpisodeImportEvent(eventType: string): boolean {
+    return episodeImportEvents.includes(eventType);
+  }
 }
+
+const episodeImportEvents = ["episodeFileImported", "downloadFolderImported"];

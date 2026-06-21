@@ -7,6 +7,8 @@ export type AppConfig = {
     clientId?: string;
     moviesChannelId: string;
     showsChannelId: string;
+    movieReleasesChannelId: string;
+    showReleasesChannelId: string;
   };
   radarr: {
     url: string;
@@ -26,6 +28,9 @@ export type AppConfig = {
   };
   search: {
     timeoutMs: number;
+    pollIntervalMs: number;
+  };
+  releases: {
     pollIntervalMs: number;
   };
 };
@@ -84,7 +89,9 @@ export function loadConfig(): AppConfig {
       guildId: required("DISCORD_GUILD_ID"),
       clientId: optional("DISCORD_CLIENT_ID"),
       moviesChannelId: required("MOVIES_CHANNEL_ID"),
-      showsChannelId: required("SHOWS_CHANNEL_ID")
+      showsChannelId: required("SHOWS_CHANNEL_ID"),
+      movieReleasesChannelId: required("MOVIE_RELEASES_CHANNEL_ID"),
+      showReleasesChannelId: required("SHOW_RELEASES_CHANNEL_ID")
     },
     radarr: {
       url: required("RADARR_URL").replace(/\/$/, ""),
@@ -105,6 +112,9 @@ export function loadConfig(): AppConfig {
     search: {
       timeoutMs: numberFromEnv("SEARCH_TIMEOUT_SECONDS", 60) * 1000,
       pollIntervalMs: numberFromEnv("POLL_INTERVAL_SECONDS", 5) * 1000
+    },
+    releases: {
+      pollIntervalMs: numberFromEnv("RELEASE_POLL_INTERVAL_SECONDS", 60) * 1000
     }
   };
 }

@@ -1,7 +1,9 @@
+import { Events } from "discord.js";
 import { RadarrClient } from "./arr/radarr.js";
 import { SonarrClient } from "./arr/sonarr.js";
 import { loadConfig } from "./config.js";
 import { createDiscordClient } from "./discord/messages.js";
+import { startReleaseMonitor } from "./discord/releases.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -26,6 +28,10 @@ async function main(): Promise<void> {
 
   const client = createDiscordClient({ config, radarr, sonarr });
   await client.login(config.discord.token);
+  if (!client.isReady()) {
+    await new Promise<void>((resolve) => client.once(Events.ClientReady, () => resolve()));
+  }
+  startReleaseMonitor(client, { config, radarr, sonarr });
 }
 
 main().catch((error) => {

@@ -17,9 +17,15 @@ type RadarrMovie = RadarrMovieLookup & {
 
 type RadarrHistoryPage = {
   records: Array<{
+    id?: number;
     eventType: string;
     date: string;
     movieId: number;
+    sourceTitle?: string;
+    movie?: {
+      title?: string;
+      year?: number;
+    };
   }>;
 };
 
@@ -35,6 +41,13 @@ export type RadarrSearchResult =
   | { status: "already_exists"; title: string }
   | { status: "found"; title: string }
   | { status: "not_found"; title: string };
+
+export type RadarrRelease = {
+  id: string;
+  title: string;
+  year?: number;
+  date: Date;
+};
 
 export class RadarrClient {
   private readonly http: ArrHttpClient;
@@ -69,6 +82,25 @@ export class RadarrClient {
 
     const found = await this.pollForMovieGrab(movie.id, startedAt);
     return { status: found ? "found" : "not_found", title: movie.title };
+  }
+
+  async getImportedMoviesSince(since: Date): Promise<RadarrRelease[]> {
+    const history = await this.http.get<RadarrHistoryPage>("/api/v3/history", {
+      page: 1,
+      pageSize: 100,
+      sortKey: "date",
+      sortDirection: "descending"
+    });
+
+    return history.records
+      .filter((record) => this.isMovieImportEvent(record.eventType))
+      .filter((record) => new Date(record.date) > since)
+      .map((record) => ({
+        id: String(record.id ?? `${record.movieId}:${record.date}:${record.eventType}`),
+        title: record.movie?.title || record.sourceTitle || `Movie ${record.movieId}`,
+        year: record.movie?.year,
+        date: new Date(record.date)
+      }));
   }
 
   private async lookupMovie(title: string, year: number): Promise<RadarrMovieLookup> {
@@ -137,7 +169,7 @@ export class RadarrClient {
 
       const grabbed = history.records.some((record) => {
         if (record.movieId !== movieId || new Date(record.date) < startedAt) return false;
-        return ["grabbed", "movieFileImported", "downloadFolderImported"].includes(record.eventType);
+        return ["grabbed", ...movieImportEvents].includes(record.eventType);
       });
       const queued = queue.records.some((record) => record.movieId === movieId);
 
@@ -150,4 +182,10 @@ export class RadarrClient {
 
     return false;
   }
+
+  private isMovieImportEvent(eventType: string): boolean {
+    return movieImportEvents.includes(eventType);
+  }
 }
+
+const movieImportEvents = ["movieFileImported", "downloadFolderImported"];
