@@ -3,5 +3,7 @@ services:
     build: .
     container_name: nastastic-bot
     restart: unless-stopped
+    ports:
+      - "3456:3456"
     env_file:
       - .env

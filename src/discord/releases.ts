@@ -9,8 +9,36 @@ type ReleaseMonitorServices = {
   sonarr: SonarrClient;
 };
 
-export function startReleaseMonitor(client: Client, services: ReleaseMonitorServices): void {
+export type ReleaseAnnouncer = {
+  announceMovie(release: RadarrRelease): Promise<void>;
+  announceShow(release: SonarrRelease): Promise<void>;
+};
+
+export function createReleaseAnnouncer(client: Client, config: AppConfig): ReleaseAnnouncer {
   const announced = new Set<string>();
+
+  return {
+    async announceMovie(release: RadarrRelease): Promise<void> {
+      const key = movieReleaseKey(release);
+      if (announced.has(key)) return;
+
+      await sendToChannel(client, config.discord.movieReleasesChannelId, formatMovieRelease(release));
+      announced.add(key);
+    },
+    async announceShow(release: SonarrRelease): Promise<void> {
+      const key = showReleaseKey(release);
+      if (announced.has(key)) return;
+
+      await sendToChannel(client, config.discord.showReleasesChannelId, formatShowRelease(release));
+      announced.add(key);
+    }
+  };
+}
+
+export function startReleaseMonitor(
+  services: ReleaseMonitorServices,
+  announcer: ReleaseAnnouncer
+): void {
   let lastChecked = new Date();
   let running = false;
 
@@ -26,27 +54,11 @@ export function startReleaseMonitor(client: Client, services: ReleaseMonitorServ
       ]);
 
       for (const movie of movies.sort(byReleaseDate)) {
-        const key = `movie:${movie.id}`;
-        if (announced.has(key)) continue;
-
-        await sendToChannel(
-          client,
-          services.config.discord.movieReleasesChannelId,
-          formatMovieRelease(movie)
-        );
-        announced.add(key);
+        await announcer.announceMovie(movie);
       }
 
       for (const show of shows.sort(byReleaseDate)) {
-        const key = `show:${show.id}`;
-        if (announced.has(key)) continue;
-
-        await sendToChannel(
-          client,
-          services.config.discord.showReleasesChannelId,
-          formatShowRelease(show)
-        );
-        announced.add(key);
+        await announcer.announceShow(show);
       }
 
       lastChecked = startedAt;
@@ -63,6 +75,21 @@ export function startReleaseMonitor(client: Client, services: ReleaseMonitorServ
 
   interval.unref();
   void poll();
+}
+
+function movieReleaseKey(release: RadarrRelease): string {
+  return `movie:${release.title.toLowerCase()}:${release.year ?? ""}`;
+}
+
+function showReleaseKey(release: SonarrRelease): string {
+  return [
+    "show",
+    release.title.toLowerCase(),
+    release.year ?? "",
+    release.seasonNumber ?? "",
+    release.episodeNumber ?? "",
+    release.episodeTitle?.toLowerCase() ?? ""
+  ].join(":");
 }
 
 function formatMovieRelease(release: RadarrRelease): string {

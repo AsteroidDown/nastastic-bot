@@ -28,6 +28,33 @@ If `Full` is omitted and no season is specified, the bot searches season 1 initi
 The bot also posts completed movie and show downloads into the configured release channels.
 If a requested movie or show has not released yet, it is still added as monitored and the bot skips the immediate search.
 
+## Download notifications
+
+The bot can receive Radarr and Sonarr webhooks when downloads are imported, then post release messages immediately. The existing Radarr/Sonarr history polling remains as a fallback.
+
+Configure these environment variables:
+
+```text
+WEBHOOK_ENABLED=true
+WEBHOOK_HOST=0.0.0.0
+WEBHOOK_PORT=3456
+WEBHOOK_TOKEN=replace-me
+```
+
+In Radarr, add a Webhook connection for the On Import event:
+
+```text
+http://<bot-host>:3456/webhooks/radarr?token=<WEBHOOK_TOKEN>
+```
+
+In Sonarr, add a Webhook connection for the On Import event:
+
+```text
+http://<bot-host>:3456/webhooks/sonarr?token=<WEBHOOK_TOKEN>
+```
+
+If the bot runs through Docker Compose, port `3456` is published by default.
+
 ## Setup
 
 1. Copy `.env.example` to `.env`.

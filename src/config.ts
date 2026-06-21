@@ -33,6 +33,12 @@ export type AppConfig = {
   releases: {
     pollIntervalMs: number;
   };
+  webhooks: {
+    enabled: boolean;
+    host: string;
+    port: number;
+    token?: string;
+  };
 };
 
 function required(name: string): string {
@@ -72,6 +78,17 @@ function numberFromEnv(name: string, fallback: number): number {
   }
 
   return parsed;
+}
+
+function booleanFromEnv(name: string, fallback: boolean): boolean {
+  const value = process.env[name];
+  if (!value) return fallback;
+
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+
+  throw new Error(`${name} must be true or false`);
 }
 
 function seriesTypeFromEnv(value: string): "standard" | "anime" | "daily" {
@@ -115,6 +132,12 @@ export function loadConfig(): AppConfig {
     },
     releases: {
       pollIntervalMs: numberFromEnv("RELEASE_POLL_INTERVAL_SECONDS", 60) * 1000
+    },
+    webhooks: {
+      enabled: booleanFromEnv("WEBHOOK_ENABLED", true),
+      host: process.env.WEBHOOK_HOST || "0.0.0.0",
+      port: numberFromEnv("WEBHOOK_PORT", 3456),
+      token: optional("WEBHOOK_TOKEN")
     }
   };
 }
