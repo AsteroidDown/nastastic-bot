@@ -1,0 +1,7 @@
+services:
+  nastastic-bot:
+    build: .
+    container_name: nastastic-bot
+    restart: unless-stopped
+    env_file:
+      - .env
