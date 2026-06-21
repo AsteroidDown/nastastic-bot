@@ -31,6 +31,7 @@ async function main(): Promise<void> {
   if (!client.isReady()) {
     await new Promise<void>((resolve) => client.once(Events.ClientReady, () => resolve()));
   }
+  console.log(`NAStastic Bot running commit ${process.env.APP_COMMIT || "local"} as ${client.user?.tag}`);
   startReleaseMonitor(client, { config, radarr, sonarr });
 }
 

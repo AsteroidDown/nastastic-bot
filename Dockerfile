@@ -12,6 +12,8 @@ RUN npm run build
 FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+ARG SOURCE_COMMIT=local
+ENV APP_COMMIT=$SOURCE_COMMIT
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
