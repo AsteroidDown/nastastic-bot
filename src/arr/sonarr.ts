@@ -6,7 +6,7 @@ type SonarrSeason = {
   monitored: boolean;
 };
 
-type SonarrSeriesLookup = {
+export type SonarrSeriesLookup = {
   title: string;
   year: number;
   tvdbId: number;
@@ -85,11 +85,39 @@ export class SonarrClient {
 
   async addAndSearch(
     title: string,
-    year: number,
+    year: number | undefined,
     qualityProfileName: string,
     searchScope: SonarrSearchScope
   ): Promise<SonarrSearchResult> {
-    const match = await this.lookupSeries(title, year);
+    const matches = await this.lookupSeries(title, year);
+    const match = matches[0];
+    if (!match) {
+      throw new Error(`Could not identify show "${title}${year ? ` ${year}` : ""}" in Sonarr.`);
+    }
+
+    return this.addLookupAndSearch(match, qualityProfileName, searchScope);
+  }
+
+  async lookupSeries(title: string, year?: number): Promise<SonarrSeriesLookup[]> {
+    const results = await this.http.get<SonarrSeriesLookup[]>("/api/v3/series/lookup", {
+      term: year ? `${title} ${year}` : title
+    });
+
+    if (year === undefined) return results;
+
+    const exact = results.find(
+      (series) => series.year === year && series.title.toLowerCase() === title.toLowerCase()
+    );
+    if (exact) return [exact];
+
+    return results.filter((series) => series.year === year);
+  }
+
+  async addLookupAndSearch(
+    match: SonarrSeriesLookup,
+    qualityProfileName: string,
+    searchScope: SonarrSearchScope
+  ): Promise<SonarrSearchResult> {
     const existing = await this.findExistingSeries(match.tvdbId);
 
     if (existing) {
@@ -149,24 +177,6 @@ export class SonarrClient {
         episodeTitle: record.episode?.title,
         date: new Date(record.date)
       }));
-  }
-
-  private async lookupSeries(title: string, year: number): Promise<SonarrSeriesLookup> {
-    const results = await this.http.get<SonarrSeriesLookup[]>("/api/v3/series/lookup", {
-      term: `${title} ${year}`
-    });
-
-    const exact = results.find(
-      (series) => series.year === year && series.title.toLowerCase() === title.toLowerCase()
-    );
-    const sameYear = results.find((series) => series.year === year);
-    const match = exact || sameYear || results[0];
-
-    if (!match) {
-      throw new Error(`Could not identify show "${title} ${year}" in Sonarr.`);
-    }
-
-    return match;
   }
 
   private async findExistingSeries(tvdbId: number): Promise<SonarrSeries | undefined> {

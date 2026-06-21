@@ -1,14 +1,14 @@
 export type MovieRequest = {
   kind: "movie";
   title: string;
-  year: number;
+  year?: number;
   qualityToken?: string;
 };
 
 export type ShowRequest = {
   kind: "show";
   title: string;
-  year: number;
+  year?: number;
   qualityToken?: string;
   scope: "full" | "season";
   seasonNumber?: number;
@@ -19,7 +19,7 @@ export type ParseResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: string };
 
-const YEAR_PATTERN = /\b(19\d{2}|20\d{2})\b/;
+const YEAR_PATTERN = /^(19\d{2}|20\d{2})$/;
 const QUALITY_PATTERN = /^(720p|1080p|2160p|4k|uhd|animation)$/i;
 const EPISODE_PATTERN = /\bS\d{1,2}E\d{1,2}\b/i;
 
@@ -27,26 +27,30 @@ function trimWords(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function splitAroundYear(content: string): ParseResult<{
+function parseRequestParts(content: string): ParseResult<{
   title: string;
-  year: number;
+  year?: number;
   rest: string[];
 }> {
   const normalized = trimWords(content);
-  const match = YEAR_PATTERN.exec(normalized);
+  const parts = normalized ? normalized.split(" ") : [];
+  const yearIndex = parts.findIndex((part) => YEAR_PATTERN.test(part));
 
-  if (!match?.index) {
+  if (parts.length === 0) {
     return {
       ok: false,
       error:
-        "Please include a title, year, and optional quality. Example: `Superbad 2011 1080p`",
+        "Please include a title and optional year/quality. Example: `Superbad 2011 1080p`",
     };
   }
 
-  const title = trimWords(normalized.slice(0, match.index));
-  const year = Number(match[1]);
-  const restText = trimWords(normalized.slice(match.index + match[1].length));
-  const rest = restText ? restText.split(" ") : [];
+  if (yearIndex === -1) {
+    return { ok: true, value: { title: trimWords(parts.join(" ")), rest: [] } };
+  }
+
+  const title = trimWords(parts.slice(0, yearIndex).join(" "));
+  const year = Number(parts[yearIndex]);
+  const rest = parts.slice(yearIndex + 1);
 
   if (!title) {
     return {
@@ -70,13 +74,12 @@ function popQualityToken(parts: string[]): string | undefined {
 }
 
 export function parseMovieRequest(content: string): ParseResult<MovieRequest> {
-  const split = splitAroundYear(content);
+  const parts = trimWords(content).split(" ").filter(Boolean);
+  const qualityToken = popQualityToken(parts);
+  const split = parseRequestParts(parts.join(" "));
   if (!split.ok) return split;
 
-  const rest = [...split.value.rest];
-  const qualityToken = popQualityToken(rest);
-
-  if (rest.length > 0) {
+  if (split.value.rest.length > 0) {
     return {
       ok: false,
       error:
@@ -104,19 +107,19 @@ export function parseShowRequest(content: string): ParseResult<ShowRequest> {
     };
   }
 
-  const split = splitAroundYear(content);
+  const parts = trimWords(content).split(" ").filter(Boolean);
+  const qualityToken = popQualityToken(parts);
+  const scope = popShowScope(parts);
+  const split = parseRequestParts(parts.join(" "));
   if (!split.ok) {
     return {
       ok: false,
       error:
-        "Please include a show title, year, and optional scope. Example: `Severance 2022 Full 1080p`",
+        "Please include a show title and optional year/scope. Example: `Severance 2022 Full 1080p`",
     };
   }
 
-  const rest = [...split.value.rest];
-  const qualityToken = popQualityToken(rest);
-
-  if (rest.length === 0) {
+  if (split.value.rest.length === 0 && !scope) {
     return {
       ok: true,
       value: {
@@ -131,7 +134,7 @@ export function parseShowRequest(content: string): ParseResult<ShowRequest> {
     };
   }
 
-  if (rest.length === 1 && /^full$/i.test(rest[0])) {
+  if (split.value.rest.length === 0 && scope?.scope === "full") {
     return {
       ok: true,
       value: {
@@ -145,11 +148,7 @@ export function parseShowRequest(content: string): ParseResult<ShowRequest> {
     };
   }
 
-  const seasonMatch =
-    rest.join(" ").match(/^season\s+(\d{1,2})$/i) ||
-    rest.join(" ").match(/^s(\d{1,2})$/i);
-
-  if (seasonMatch) {
+  if (split.value.rest.length === 0 && scope?.scope === "season") {
     return {
       ok: true,
       value: {
@@ -158,7 +157,7 @@ export function parseShowRequest(content: string): ParseResult<ShowRequest> {
         year: split.value.year,
         qualityToken,
         scope: "season",
-        seasonNumber: Number(seasonMatch[1]),
+        seasonNumber: scope.seasonNumber,
         monitorWholeShow: true,
       },
     };
@@ -169,4 +168,33 @@ export function parseShowRequest(content: string): ParseResult<ShowRequest> {
     error:
       "Show format is `Title Year Full Quality` or `Title Year Season 1 Quality`.",
   };
+}
+
+function popShowScope(parts: string[]):
+  | { scope: "full" }
+  | { scope: "season"; seasonNumber: number }
+  | undefined {
+  const last = parts.at(-1);
+  if (!last) return undefined;
+
+  if (/^full$/i.test(last)) {
+    parts.pop();
+    return { scope: "full" };
+  }
+
+  const compactSeason = last.match(/^s(\d{1,2})$/i);
+  if (compactSeason) {
+    parts.pop();
+    return { scope: "season", seasonNumber: Number(compactSeason[1]) };
+  }
+
+  const maybeNumber = Number(last);
+  const maybeSeason = parts.at(-2);
+  if (Number.isInteger(maybeNumber) && maybeNumber > 0 && maybeSeason && /^season$/i.test(maybeSeason)) {
+    parts.pop();
+    parts.pop();
+    return { scope: "season", seasonNumber: maybeNumber };
+  }
+
+  return undefined;
 }

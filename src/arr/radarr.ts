@@ -1,7 +1,7 @@
 import { ArrHttpClient, findQualityProfile, type QualityProfile } from "./http.js";
 import { sleep } from "../util/sleep.js";
 
-type RadarrMovieLookup = {
+export type RadarrMovieLookup = {
   title: string;
   originalTitle?: string;
   year: number;
@@ -68,8 +68,35 @@ export class RadarrClient {
     this.http = new ArrHttpClient(baseUrl, apiKey);
   }
 
-  async addAndSearch(title: string, year: number, qualityProfileName: string): Promise<RadarrSearchResult> {
-    const match = await this.lookupMovie(title, year);
+  async addAndSearch(title: string, year: number | undefined, qualityProfileName: string): Promise<RadarrSearchResult> {
+    const matches = await this.lookupMovies(title, year);
+    const match = matches[0];
+    if (!match) {
+      throw new Error(`Could not identify movie "${title}${year ? ` ${year}` : ""}" in Radarr.`);
+    }
+
+    return this.addLookupAndSearch(match, qualityProfileName);
+  }
+
+  async lookupMovies(title: string, year?: number): Promise<RadarrMovieLookup[]> {
+    const results = await this.http.get<RadarrMovieLookup[]>("/api/v3/movie/lookup", {
+      term: year ? `${title} ${year}` : title
+    });
+
+    if (year === undefined) return results;
+
+    const exact = results.find(
+      (movie) => movie.year === year && movie.title.toLowerCase() === title.toLowerCase()
+    );
+    if (exact) return [exact];
+
+    return results.filter((movie) => movie.year === year);
+  }
+
+  async addLookupAndSearch(
+    match: RadarrMovieLookup,
+    qualityProfileName: string
+  ): Promise<RadarrSearchResult> {
     const existing = await this.findExistingMovie(match.tmdbId);
 
     if (existing) {
@@ -110,24 +137,6 @@ export class RadarrClient {
         year: record.movie?.year,
         date: new Date(record.date)
       }));
-  }
-
-  private async lookupMovie(title: string, year: number): Promise<RadarrMovieLookup> {
-    const results = await this.http.get<RadarrMovieLookup[]>("/api/v3/movie/lookup", {
-      term: `${title} ${year}`
-    });
-
-    const exact = results.find(
-      (movie) => movie.year === year && movie.title.toLowerCase() === title.toLowerCase()
-    );
-    const sameYear = results.find((movie) => movie.year === year);
-    const match = exact || sameYear || results[0];
-
-    if (!match) {
-      throw new Error(`Could not identify movie "${title} ${year}" in Radarr.`);
-    }
-
-    return match;
   }
 
   private async findExistingMovie(tmdbId: number): Promise<RadarrMovie | undefined> {

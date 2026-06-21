@@ -23,6 +23,15 @@ test("parses a movie request without quality", () => {
   assert.equal(result.value.qualityToken, undefined);
 });
 
+test("parses a movie request without a year", () => {
+  const result = parseMovieRequest("Harry Potter");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  assert.equal(result.value.title, "Harry Potter");
+  assert.equal(result.value.year, undefined);
+});
+
 test("parses a full show request", () => {
   const result = parseShowRequest("Severance 2022 Full 1080p");
   assert.equal(result.ok, true);
@@ -51,6 +60,17 @@ test("defaults show requests to season one", () => {
   assert.equal(result.value.scope, "season");
   assert.equal(result.value.seasonNumber, 1);
   assert.equal(result.value.monitorWholeShow, false);
+});
+
+test("parses a title-only show request", () => {
+  const result = parseShowRequest("Severance");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  assert.equal(result.value.title, "Severance");
+  assert.equal(result.value.year, undefined);
+  assert.equal(result.value.scope, "season");
+  assert.equal(result.value.seasonNumber, 1);
 });
 
 test("rejects episode show requests", () => {
