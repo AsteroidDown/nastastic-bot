@@ -122,7 +122,7 @@ async function handleMovieRequest(
   const status = await message.reply(`Searching for ${parsed.value.title}...`);
   const matches = await services.radarr.lookupMovies(parsed.value.title, parsed.value.year);
 
-  if (matches.length > 1) {
+  if (matches.length > 1 || (matches.length > 0 && parsed.value.year === undefined)) {
     await promptForMovieSelection(status, message.author.id, matches, quality, pendingSelections);
     return;
   }

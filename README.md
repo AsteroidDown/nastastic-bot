@@ -7,9 +7,12 @@ Discord request bot for adding movies to Radarr and shows/seasons to Sonarr.
 Movies channel:
 
 ```text
+Back to the Future
 Superbad 2011 1080p
 Superbad 2011
 ```
+
+Title-only movie requests search Radarr and ask you to pick from the possible matches.
 
 Shows channel:
 

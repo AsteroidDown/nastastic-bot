@@ -32,6 +32,16 @@ test("parses a movie request without a year", () => {
   assert.equal(result.value.year, undefined);
 });
 
+test("parses a single-word movie title", () => {
+  const result = parseMovieRequest("Back to the Future");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  assert.equal(result.value.title, "Back to the Future");
+  assert.equal(result.value.year, undefined);
+  assert.equal(result.value.qualityToken, undefined);
+});
+
 test("parses a full show request", () => {
   const result = parseShowRequest("Severance 2022 Full 1080p");
   assert.equal(result.ok, true);
