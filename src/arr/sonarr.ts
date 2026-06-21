@@ -174,7 +174,6 @@ export class SonarrClient {
       const [history, queue] = await Promise.all([
         this.http.get<SonarrHistoryPage>("/api/v3/history", {
           seriesId,
-          eventType: "grabbed",
           page: 1,
           pageSize: 20,
           sortKey: "date",
@@ -189,6 +188,9 @@ export class SonarrClient {
 
       const grabbed = history.records.some((record) => {
         if (record.seriesId !== seriesId || new Date(record.date) < startedAt) return false;
+        if (!["grabbed", "episodeFileImported", "downloadFolderImported"].includes(record.eventType)) {
+          return false;
+        }
         return this.recordMatchesScope(record.episode?.seasonNumber, searchScope);
       });
       const queued = queue.records.some((record) => {

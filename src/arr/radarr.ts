@@ -123,7 +123,6 @@ export class RadarrClient {
       const [history, queue] = await Promise.all([
         this.http.get<RadarrHistoryPage>("/api/v3/history", {
           movieId,
-          eventType: "grabbed",
           page: 1,
           pageSize: 10,
           sortKey: "date",
@@ -136,9 +135,10 @@ export class RadarrClient {
         })
       ]);
 
-      const grabbed = history.records.some(
-        (record) => record.movieId === movieId && new Date(record.date) >= startedAt
-      );
+      const grabbed = history.records.some((record) => {
+        if (record.movieId !== movieId || new Date(record.date) < startedAt) return false;
+        return ["grabbed", "movieFileImported", "downloadFolderImported"].includes(record.eventType);
+      });
       const queued = queue.records.some((record) => record.movieId === movieId);
 
       if (grabbed || queued) {
