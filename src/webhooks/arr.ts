@@ -42,6 +42,10 @@ type SonarrWebhookPayload = {
   };
 };
 
+type WebhookResult =
+  | { status: "announced" }
+  | { status: "ignored"; reason: string };
+
 export function startArrWebhookServer(services: WebhookServices): Server | undefined {
   if (!services.config.webhooks.enabled) {
     return undefined;
@@ -80,14 +84,16 @@ async function routeRequest(
     const payload = await readJsonBody(request);
 
     if (url.pathname === "/webhooks/radarr" || url.pathname === "/webhook/radarr") {
-      await handleRadarrWebhook(payload as RadarrWebhookPayload, services.announcer);
-      sendJson(response, 202, { ok: true });
+      const result = await handleRadarrWebhook(payload as RadarrWebhookPayload, services.announcer);
+      logWebhookResult("radarr", payload, result);
+      sendJson(response, 202, { ok: true, ...result });
       return;
     }
 
     if (url.pathname === "/webhooks/sonarr" || url.pathname === "/webhook/sonarr") {
-      await handleSonarrWebhook(payload as SonarrWebhookPayload, services.announcer);
-      sendJson(response, 202, { ok: true });
+      const result = await handleSonarrWebhook(payload as SonarrWebhookPayload, services.announcer);
+      logWebhookResult("sonarr", payload, result);
+      sendJson(response, 202, { ok: true, ...result });
       return;
     }
 
@@ -101,10 +107,15 @@ async function routeRequest(
 async function handleRadarrWebhook(
   payload: RadarrWebhookPayload,
   announcer: ReleaseAnnouncer
-): Promise<void> {
-  if (payload.eventType !== "Download" || payload.isUpgrade) return;
+): Promise<WebhookResult> {
+  if (payload.eventType !== "Download") {
+    return { status: "ignored", reason: `unsupported event type ${payload.eventType || "unknown"}` };
+  }
+  if (payload.isUpgrade) {
+    return { status: "ignored", reason: "upgrade event" };
+  }
   if (!payload.movie?.title) {
-    throw new Error("Radarr webhook payload did not include a movie title.");
+    return { status: "ignored", reason: "missing movie title" };
   }
 
   const release: RadarrRelease = {
@@ -115,15 +126,21 @@ async function handleRadarrWebhook(
   };
 
   await announcer.announceMovie(release);
+  return { status: "announced" };
 }
 
 async function handleSonarrWebhook(
   payload: SonarrWebhookPayload,
   announcer: ReleaseAnnouncer
-): Promise<void> {
-  if (payload.eventType !== "Download" || payload.isUpgrade) return;
+): Promise<WebhookResult> {
+  if (payload.eventType !== "Download") {
+    return { status: "ignored", reason: `unsupported event type ${payload.eventType || "unknown"}` };
+  }
+  if (payload.isUpgrade) {
+    return { status: "ignored", reason: "upgrade event" };
+  }
   if (!payload.series?.title) {
-    throw new Error("Sonarr webhook payload did not include a series title.");
+    return { status: "ignored", reason: "missing series title" };
   }
 
   const episodes = payload.episodes?.length ? payload.episodes : [undefined];
@@ -141,6 +158,8 @@ async function handleSonarrWebhook(
 
     await announcer.announceShow(release);
   }
+
+  return { status: "announced" };
 }
 
 function isAuthorized(request: IncomingMessage, url: URL, token: string | undefined): boolean {
@@ -181,4 +200,33 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
 function sendJson(response: ServerResponse, statusCode: number, body: unknown): void {
   response.writeHead(statusCode, { "content-type": "application/json" });
   response.end(JSON.stringify(body));
+}
+
+function logWebhookResult(source: "radarr" | "sonarr", payload: unknown, result: WebhookResult): void {
+  const summary = payloadSummary(payload);
+  console.log(`[webhook] ${JSON.stringify({ source, ...summary, ...result })}`);
+}
+
+function payloadSummary(payload: unknown): Record<string, unknown> {
+  if (!payload || typeof payload !== "object") {
+    return { eventType: "unknown" };
+  }
+
+  const record = payload as Record<string, unknown>;
+  const movie = valueRecord(record.movie);
+  const series = valueRecord(record.series);
+
+  return {
+    eventType: record.eventType,
+    isUpgrade: record.isUpgrade,
+    title: valueString(movie?.title) || valueString(series?.title)
+  };
+}
+
+function valueRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+}
+
+function valueString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
