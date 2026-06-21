@@ -94,11 +94,21 @@ async function handleMessage(
   if (message.guildId !== services.config.discord.guildId) return;
 
   if (message.channelId === services.config.discord.moviesChannelId) {
+    if (!hasReadableContent(message)) {
+      await replyWithMissingMessageContentHelp(message);
+      return;
+    }
+
     await handleMovieRequest(message, services, pendingSelections);
     return;
   }
 
   if (message.channelId === services.config.discord.showsChannelId) {
+    if (!hasReadableContent(message)) {
+      await replyWithMissingMessageContentHelp(message);
+      return;
+    }
+
     await handleShowRequest(message, services, pendingSelections);
   }
 }
@@ -321,6 +331,17 @@ function formatSonarrResult(result: SonarrSearchResult): string {
   }
 
   return `Unable to find ${title} download`;
+}
+
+function hasReadableContent(message: Message): boolean {
+  return message.content.trim().length > 0;
+}
+
+async function replyWithMissingMessageContentHelp(message: Message): Promise<void> {
+  await safeReply(
+    message,
+    "I can't read that message yet. Enable the Message Content Intent for this bot in the Discord Developer Portal, then restart me."
+  );
 }
 
 async function safeReply(message: Message, content: string): Promise<void> {

@@ -32,14 +32,15 @@ If a requested movie or show has not released yet, it is still added as monitore
 
 1. Copy `.env.example` to `.env`.
 2. Fill in `DISCORD_TOKEN`, `RADARR_API_KEY`, and `SONARR_API_KEY`.
-3. Run locally:
+3. In the Discord Developer Portal, enable the bot's privileged Message Content Intent.
+4. Run locally:
 
 ```sh
 npm install
 npm run dev
 ```
 
-4. Or run with Docker:
+5. Or run with Docker:
 
 ```sh
 docker compose up -d --build
