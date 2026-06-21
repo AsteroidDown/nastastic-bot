@@ -11,6 +11,8 @@ type SonarrSeriesLookup = {
   year: number;
   tvdbId: number;
   titleSlug: string;
+  status?: string;
+  firstAired?: string;
   images?: unknown[];
   seasons?: SonarrSeason[];
 };
@@ -53,6 +55,7 @@ export type SonarrSearchScope =
 
 export type SonarrSearchResult =
   | { status: "already_exists"; title: string }
+  | { status: "unreleased"; title: string; seasonNumber?: number }
   | { status: "found"; title: string; seasonNumber?: number }
   | { status: "not_found"; title: string; seasonNumber?: number };
 
@@ -95,6 +98,14 @@ export class SonarrClient {
 
     const qualityProfile = await this.getQualityProfile(qualityProfileName);
     const series = await this.addSeries(match, qualityProfile.id, searchScope);
+    if (this.isUnreleasedSeries(match)) {
+      return {
+        status: "unreleased",
+        title: series.title,
+        seasonNumber: searchScope.scope === "season" ? searchScope.seasonNumber : undefined
+      };
+    }
+
     const startedAt = new Date();
 
     if (searchScope.scope === "full") {
@@ -255,6 +266,19 @@ export class SonarrClient {
 
   private isEpisodeImportEvent(eventType: string): boolean {
     return episodeImportEvents.includes(eventType);
+  }
+
+  private isUnreleasedSeries(series: SonarrSeriesLookup): boolean {
+    if (series.status === "upcoming") {
+      return true;
+    }
+
+    if (!series.firstAired) {
+      return false;
+    }
+
+    const firstAired = Date.parse(series.firstAired);
+    return Number.isFinite(firstAired) && firstAired > Date.now();
   }
 }
 

@@ -23,6 +23,7 @@ Severance 2022 1080p
 If `Full` is omitted and no season is specified, the bot searches season 1 initially.
 
 The bot also posts completed movie and show downloads into the configured release channels.
+If a requested movie or show has not released yet, it is still added as monitored and the bot skips the immediate search.
 
 ## Setup
 

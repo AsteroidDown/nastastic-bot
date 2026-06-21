@@ -7,6 +7,10 @@ type RadarrMovieLookup = {
   year: number;
   tmdbId: number;
   titleSlug: string;
+  status?: string;
+  inCinemas?: string;
+  digitalRelease?: string;
+  physicalRelease?: string;
   images?: unknown[];
 };
 
@@ -39,6 +43,7 @@ type RadarrQueuePage = {
 
 export type RadarrSearchResult =
   | { status: "already_exists"; title: string }
+  | { status: "unreleased"; title: string }
   | { status: "found"; title: string }
   | { status: "not_found"; title: string };
 
@@ -73,6 +78,10 @@ export class RadarrClient {
 
     const qualityProfile = await this.getQualityProfile(qualityProfileName);
     const movie = await this.addMovie(match, qualityProfile.id);
+    if (this.isUnreleasedMovie(match)) {
+      return { status: "unreleased", title: movie.title };
+    }
+
     const startedAt = new Date();
 
     await this.http.post("/api/v3/command", {
@@ -185,6 +194,19 @@ export class RadarrClient {
 
   private isMovieImportEvent(eventType: string): boolean {
     return movieImportEvents.includes(eventType);
+  }
+
+  private isUnreleasedMovie(movie: RadarrMovieLookup): boolean {
+    if (movie.status && movie.status !== "released") {
+      return true;
+    }
+
+    const now = Date.now();
+    const knownReleaseTimes = [movie.digitalRelease, movie.physicalRelease, movie.inCinemas]
+      .map((value) => (value ? Date.parse(value) : Number.NaN))
+      .filter(Number.isFinite);
+
+    return knownReleaseTimes.length > 0 && knownReleaseTimes.every((time) => time > now);
   }
 }
 

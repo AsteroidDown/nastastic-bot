@@ -115,6 +115,10 @@ function formatRadarrResult(result: RadarrSearchResult): string {
     return `${result.title} found!`;
   }
 
+  if (result.status === "unreleased") {
+    return `${result.title} hasn't released yet but it is being monitored!`;
+  }
+
   return `Unable to find ${result.title} download`;
 }
 
@@ -129,6 +133,10 @@ function formatSonarrResult(result: SonarrSearchResult): string {
 
   if (result.status === "found") {
     return `${title} found!`;
+  }
+
+  if (result.status === "unreleased") {
+    return `${result.title} hasn't released yet but it is being monitored!`;
   }
 
   return `Unable to find ${title} download`;
