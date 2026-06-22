@@ -1,13 +1,7 @@
 import { type Client } from "discord.js";
 import { type AppConfig } from "../config.js";
-import { type RadarrClient, type RadarrRelease } from "../arr/radarr.js";
-import { type SonarrClient, type SonarrRelease } from "../arr/sonarr.js";
-
-type ReleaseMonitorServices = {
-  config: AppConfig;
-  radarr: RadarrClient;
-  sonarr: SonarrClient;
-};
+import { type RadarrRelease } from "../arr/radarr.js";
+import { type SonarrRelease } from "../arr/sonarr.js";
 
 export type ReleaseAnnouncer = {
   announceMovie(release: RadarrRelease): Promise<void>;
@@ -33,48 +27,6 @@ export function createReleaseAnnouncer(client: Client, config: AppConfig): Relea
       announced.add(key);
     }
   };
-}
-
-export function startReleaseMonitor(
-  services: ReleaseMonitorServices,
-  announcer: ReleaseAnnouncer
-): void {
-  let lastChecked = new Date();
-  let running = false;
-
-  const poll = async (): Promise<void> => {
-    if (running) return;
-    running = true;
-    const startedAt = new Date();
-
-    try {
-      const [movies, shows] = await Promise.all([
-        services.radarr.getImportedMoviesSince(lastChecked),
-        services.sonarr.getImportedEpisodesSince(lastChecked)
-      ]);
-
-      for (const movie of movies.sort(byReleaseDate)) {
-        await announcer.announceMovie(movie);
-      }
-
-      for (const show of shows.sort(byReleaseDate)) {
-        await announcer.announceShow(show);
-      }
-
-      lastChecked = startedAt;
-    } catch (error) {
-      console.error("Failed to poll release history", error);
-    } finally {
-      running = false;
-    }
-  };
-
-  const interval = setInterval(() => {
-    void poll();
-  }, services.config.releases.pollIntervalMs);
-
-  interval.unref();
-  void poll();
 }
 
 function movieReleaseKey(release: RadarrRelease): string {
@@ -118,8 +70,4 @@ async function sendToChannel(client: Client, channelId: string, content: string)
   }
 
   await channel.send(content);
-}
-
-function byReleaseDate(a: { date: Date }, b: { date: Date }): number {
-  return a.date.getTime() - b.date.getTime();
 }

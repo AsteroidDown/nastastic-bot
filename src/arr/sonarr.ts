@@ -27,7 +27,6 @@ type SonarrHistoryPage = {
     eventType: string;
     date: string;
     seriesId: number;
-    sourceTitle?: string;
     series?: {
       title?: string;
       year?: number;
@@ -157,28 +156,6 @@ export class SonarrClient {
     };
   }
 
-  async getImportedEpisodesSince(since: Date): Promise<SonarrRelease[]> {
-    const history = await this.http.get<SonarrHistoryPage>("/api/v3/history", {
-      page: 1,
-      pageSize: 100,
-      sortKey: "date",
-      sortDirection: "descending"
-    });
-
-    return history.records
-      .filter((record) => this.isEpisodeImportEvent(record.eventType))
-      .filter((record) => new Date(record.date) > since)
-      .map((record) => ({
-        id: String(record.id ?? `${record.seriesId}:${record.episode?.seasonNumber}:${record.episode?.episodeNumber}:${record.date}`),
-        title: record.series?.title || record.sourceTitle || `Show ${record.seriesId}`,
-        year: record.series?.year,
-        seasonNumber: record.episode?.seasonNumber,
-        episodeNumber: record.episode?.episodeNumber,
-        episodeTitle: record.episode?.title,
-        date: new Date(record.date)
-      }));
-  }
-
   private async findExistingSeries(tvdbId: number): Promise<SonarrSeries | undefined> {
     const series = await this.http.get<SonarrSeries[]>("/api/v3/series");
     return series.find((item) => item.tvdbId === tvdbId);
@@ -272,10 +249,6 @@ export class SonarrClient {
   private recordMatchesScope(seasonNumber: number | undefined, searchScope: SonarrSearchScope): boolean {
     if (searchScope.scope === "full") return true;
     return seasonNumber === undefined || seasonNumber === searchScope.seasonNumber;
-  }
-
-  private isEpisodeImportEvent(eventType: string): boolean {
-    return episodeImportEvents.includes(eventType);
   }
 
   private isUnreleasedSeries(series: SonarrSeriesLookup): boolean {

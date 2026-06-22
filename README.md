@@ -30,7 +30,7 @@ If a requested movie or show has not released yet, it is still added as monitore
 
 ## Download notifications
 
-The bot can receive Radarr and Sonarr webhooks when downloads are imported, then post release messages immediately. The existing Radarr/Sonarr history polling remains as a fallback.
+The bot receives Radarr and Sonarr webhooks when downloads are imported, then posts release messages immediately.
 
 Configure these environment variables:
 

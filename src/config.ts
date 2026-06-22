@@ -30,9 +30,6 @@ export type AppConfig = {
     timeoutMs: number;
     pollIntervalMs: number;
   };
-  releases: {
-    pollIntervalMs: number;
-  };
   webhooks: {
     enabled: boolean;
     host: string;
@@ -129,9 +126,6 @@ export function loadConfig(): AppConfig {
     search: {
       timeoutMs: numberFromEnv("SEARCH_TIMEOUT_SECONDS", 60) * 1000,
       pollIntervalMs: numberFromEnv("POLL_INTERVAL_SECONDS", 5) * 1000
-    },
-    releases: {
-      pollIntervalMs: numberFromEnv("RELEASE_POLL_INTERVAL_SECONDS", 60) * 1000
     },
     webhooks: {
       enabled: booleanFromEnv("WEBHOOK_ENABLED", true),

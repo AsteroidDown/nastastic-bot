@@ -25,7 +25,6 @@ type RadarrHistoryPage = {
     eventType: string;
     date: string;
     movieId: number;
-    sourceTitle?: string;
     movie?: {
       title?: string;
       year?: number;
@@ -120,25 +119,6 @@ export class RadarrClient {
     return { status: found ? "found" : "not_found", title: movie.title };
   }
 
-  async getImportedMoviesSince(since: Date): Promise<RadarrRelease[]> {
-    const history = await this.http.get<RadarrHistoryPage>("/api/v3/history", {
-      page: 1,
-      pageSize: 100,
-      sortKey: "date",
-      sortDirection: "descending"
-    });
-
-    return history.records
-      .filter((record) => this.isMovieImportEvent(record.eventType))
-      .filter((record) => new Date(record.date) > since)
-      .map((record) => ({
-        id: String(record.id ?? `${record.movieId}:${record.date}:${record.eventType}`),
-        title: record.movie?.title || record.sourceTitle || `Movie ${record.movieId}`,
-        year: record.movie?.year,
-        date: new Date(record.date)
-      }));
-  }
-
   private async findExistingMovie(tmdbId: number): Promise<RadarrMovie | undefined> {
     const movies = await this.http.get<RadarrMovie[]>("/api/v3/movie");
     return movies.find((movie) => movie.tmdbId === tmdbId);
@@ -199,10 +179,6 @@ export class RadarrClient {
     }
 
     return false;
-  }
-
-  private isMovieImportEvent(eventType: string): boolean {
-    return movieImportEvents.includes(eventType);
   }
 
   private isUnreleasedMovie(movie: RadarrMovieLookup): boolean {

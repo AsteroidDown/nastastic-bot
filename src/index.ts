@@ -3,7 +3,7 @@ import { RadarrClient } from "./arr/radarr.js";
 import { SonarrClient } from "./arr/sonarr.js";
 import { loadConfig } from "./config.js";
 import { createDiscordClient } from "./discord/messages.js";
-import { createReleaseAnnouncer, startReleaseMonitor } from "./discord/releases.js";
+import { createReleaseAnnouncer } from "./discord/releases.js";
 import { startArrWebhookServer } from "./webhooks/arr.js";
 
 async function main(): Promise<void> {
@@ -34,7 +34,6 @@ async function main(): Promise<void> {
   }
   console.log(`NAStastic Bot running commit ${process.env.APP_COMMIT || "local"} as ${client.user?.tag}`);
   const announcer = createReleaseAnnouncer(client, config);
-  startReleaseMonitor({ config, radarr, sonarr }, announcer);
   startArrWebhookServer({ config, announcer });
 }
 
