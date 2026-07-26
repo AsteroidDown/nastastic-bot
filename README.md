@@ -12,7 +12,7 @@ Superbad 2011 1080p
 Superbad 2011
 ```
 
-Title-only movie requests search Radarr and ask you to pick from the possible matches.
+Title-only movie requests search Radarr. If exactly one match is found, the bot starts the download automatically; otherwise it asks you to pick from the possible matches.
 
 Shows channel:
 

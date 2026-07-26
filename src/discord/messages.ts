@@ -146,7 +146,7 @@ async function handleMovieRequest(
     matches: matches.map(formatMovieChoice)
   });
 
-  if (matches.length > 1 || (matches.length > 0 && parsed.value.year === undefined)) {
+  if (matches.length > 1) {
     logRequest("movie_selection_prompted", message, {
       title: parsed.value.title,
       year: parsed.value.year,
