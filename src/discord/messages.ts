@@ -146,7 +146,6 @@ async function handleMovieRequest(
     year: parsed.value.year,
     quality
   });
-  const status = await message.reply(`Searching for ${parsed.value.title}...`);
   const matches = await services.radarr.lookupMovies(parsed.value.title, parsed.value.year);
   logRequest("movie_lookup_completed", message, {
     title: parsed.value.title,
@@ -161,7 +160,7 @@ async function handleMovieRequest(
       year: parsed.value.year,
       matchCount: matches.length
     });
-    await promptForMovieSelection(status, message.author.id, matches, quality, pendingSelections);
+    await promptForMovieSelection(message, message.author.id, matches, quality, pendingSelections);
     return;
   }
 
@@ -171,14 +170,15 @@ async function handleMovieRequest(
       title: parsed.value.title,
       year: parsed.value.year
     });
-    await status.edit(`Unable to identify ${parsed.value.title}`);
+    await sendMessage(message, `Unable to identify ${parsed.value.title}`);
     return;
   }
 
   logRequest("movie_add_search_started", message, { match: formatMovieChoice(match), quality });
+  await sendMessage(message, `Searching for ${formatMovieChoice(match)}...`);
   const result = await services.radarr.addLookupAndSearch(match, quality);
   logRequest("movie_add_search_completed", message, result);
-  await status.edit(formatRadarrResult(result));
+  await sendMessage(message, formatRadarrResult(result));
 }
 
 async function handleShowRequest(
@@ -198,7 +198,6 @@ async function handleShowRequest(
     services.config.sonarr.qualityMap,
     services.config.sonarr.defaultQuality
   );
-  const status = await message.reply(`Searching for ${parsed.value.title}...`);
   const searchScope: SonarrSearchScope =
     parsed.value.scope === "full"
       ? { scope: "full", monitorWholeShow: true }
@@ -228,7 +227,7 @@ async function handleShowRequest(
       matchCount: matches.length,
       searchScope
     });
-    await promptForShowSelection(status, message.author.id, matches, quality, searchScope, pendingSelections);
+    await promptForShowSelection(message, message.author.id, matches, quality, searchScope, pendingSelections);
     return;
   }
 
@@ -239,14 +238,15 @@ async function handleShowRequest(
       year: parsed.value.year,
       searchScope
     });
-    await status.edit(`Unable to identify ${parsed.value.title}`);
+    await sendMessage(message, `Unable to identify ${parsed.value.title}`);
     return;
   }
 
   logRequest("show_add_search_started", message, { match: formatShowChoice(match), quality, searchScope });
+  await sendMessage(message, `Searching for ${formatShowChoice(match)}...`);
   const result = await services.sonarr.addLookupAndSearch(match, quality, searchScope);
   logRequest("show_add_search_completed", message, result);
-  await handleSonarrSearchResult(status, message.author.id, result, pendingSelections);
+  await handleSonarrSearchResult(message, message.author.id, result, pendingSelections);
 }
 
 async function promptForMovieSelection(
@@ -257,15 +257,15 @@ async function promptForMovieSelection(
   pendingSelections: Map<string, PendingSelection>
 ): Promise<void> {
   const choices = matches.slice(0, MAX_SELECTIONS);
-  await message.edit(formatNearMatches(choices.map(formatMovieChoice)));
-  storePendingSelection(message.id, pendingSelections, {
+  const prompt = await sendMessage(message, formatNearMatches(choices.map(formatMovieChoice)));
+  storePendingSelection(prompt.id, pendingSelections, {
     kind: "movie",
     requesterId,
     matches: choices,
     quality,
-    timeout: createSelectionTimeout(message.id, pendingSelections)
+    timeout: createSelectionTimeout(prompt.id, pendingSelections)
   });
-  await reactWithChoices(message, choices.length);
+  await reactWithChoices(prompt, choices.length);
 }
 
 async function promptForShowSelection(
@@ -277,16 +277,16 @@ async function promptForShowSelection(
   pendingSelections: Map<string, PendingSelection>
 ): Promise<void> {
   const choices = matches.slice(0, MAX_SELECTIONS);
-  await message.edit(formatNearMatches(choices.map(formatShowChoice)));
-  storePendingSelection(message.id, pendingSelections, {
+  const prompt = await sendMessage(message, formatNearMatches(choices.map(formatShowChoice)));
+  storePendingSelection(prompt.id, pendingSelections, {
     kind: "show",
     requesterId,
     matches: choices,
     quality,
     searchScope,
-    timeout: createSelectionTimeout(message.id, pendingSelections)
+    timeout: createSelectionTimeout(prompt.id, pendingSelections)
   });
-  await reactWithChoices(message, choices.length);
+  await reactWithChoices(prompt, choices.length);
 }
 
 async function handleSonarrSearchResult(
@@ -296,7 +296,7 @@ async function handleSonarrSearchResult(
   pendingSelections: Map<string, PendingSelection>
 ): Promise<void> {
   if (result.status !== "manual_options") {
-    await message.edit(formatSonarrResult(result));
+    await sendMessage(message, formatSonarrResult(result));
     return;
   }
 
@@ -319,16 +319,16 @@ async function promptForSonarrReleaseSelection(
   pendingSelections: Map<string, PendingSelection>
 ): Promise<void> {
   const choices = releases.slice(0, MAX_SELECTIONS);
-  await message.edit(formatSonarrReleaseOptions(title, seasonNumber, choices));
-  storePendingSelection(message.id, pendingSelections, {
+  const prompt = await sendMessage(message, formatSonarrReleaseOptions(title, seasonNumber, choices));
+  storePendingSelection(prompt.id, pendingSelections, {
     kind: "sonarr_release",
     requesterId,
     title,
     seasonNumber,
     releases: choices,
-    timeout: createSelectionTimeout(message.id, pendingSelections)
+    timeout: createSelectionTimeout(prompt.id, pendingSelections)
   });
-  await reactWithChoices(message, choices.length);
+  await reactWithChoices(prompt, choices.length);
 }
 
 async function handleSelectionReaction(
@@ -356,10 +356,10 @@ async function handleSelectionReaction(
       match: formatMovieChoice(match),
       quality: pending.quality
     });
-    await fullReaction.message.edit(`Searching for ${formatMovieChoice(match)}...`);
+    await sendMessage(fullReaction.message as Message, `Searching for ${formatMovieChoice(match)}...`);
     const result = await services.radarr.addLookupAndSearch(match, pending.quality);
     logSelection("movie_selection_completed", fullReaction.message.id, user.id, result);
-    await fullReaction.message.edit(formatRadarrResult(result));
+    await sendMessage(fullReaction.message as Message, formatRadarrResult(result));
     return;
   }
 
@@ -373,7 +373,7 @@ async function handleSelectionReaction(
       release: formatSonarrReleaseChoice(release),
       shouldOverride
     });
-    await fullReaction.message.edit(`Grabbing ${release.title}...`);
+    await sendMessage(fullReaction.message as Message, `Grabbing ${release.title}...`);
     await services.sonarr.grabRelease(release, shouldOverride);
     logSelection("sonarr_release_selection_completed", fullReaction.message.id, user.id, {
       title: pending.title,
@@ -381,7 +381,10 @@ async function handleSelectionReaction(
       release: formatSonarrReleaseChoice(release),
       shouldOverride
     });
-    await fullReaction.message.edit(`${pending.title} - Season ${pending.seasonNumber} sent to the download client!`);
+    await sendMessage(
+      fullReaction.message as Message,
+      `${pending.title} - Season ${pending.seasonNumber} sent to the download client!`
+    );
     return;
   }
 
@@ -392,7 +395,7 @@ async function handleSelectionReaction(
     quality: pending.quality,
     searchScope: pending.searchScope
   });
-  await fullReaction.message.edit(`Searching for ${formatShowChoice(match)}...`);
+  await sendMessage(fullReaction.message as Message, `Searching for ${formatShowChoice(match)}...`);
   const result = await services.sonarr.addLookupAndSearch(match, pending.quality, pending.searchScope);
   logSelection("show_selection_completed", fullReaction.message.id, user.id, result);
   await handleSonarrSearchResult(fullReaction.message as Message, user.id || pending.requesterId, result, pendingSelections);
@@ -570,4 +573,13 @@ async function safeReply(message: Message, content: string): Promise<void> {
   const channel = message.channel as TextBasedChannel;
   if (!channel.isSendable()) return;
   await message.reply(content);
+}
+
+async function sendMessage(message: Message, content: string): Promise<Message> {
+  const channel = message.channel as TextBasedChannel;
+  if (!channel.isSendable()) {
+    throw new Error("Cannot send messages to this channel.");
+  }
+
+  return channel.send(content);
 }
