@@ -14,6 +14,7 @@ import { type AppConfig, resolveQuality } from "../config.js";
 import { RadarrClient, type RadarrMovieLookup, type RadarrSearchResult } from "../arr/radarr.js";
 import {
   SonarrClient,
+  type SonarrReleaseOption,
   type SonarrSearchResult,
   type SonarrSearchScope,
   type SonarrSeriesLookup
@@ -40,6 +41,14 @@ type PendingSelection =
       matches: SonarrSeriesLookup[];
       quality: string;
       searchScope: SonarrSearchScope;
+      timeout: NodeJS.Timeout;
+    }
+  | {
+      kind: "sonarr_release";
+      requesterId: string;
+      title: string;
+      seasonNumber: number;
+      releases: SonarrReleaseOption[];
       timeout: NodeJS.Timeout;
     };
 
@@ -237,7 +246,7 @@ async function handleShowRequest(
   logRequest("show_add_search_started", message, { match: formatShowChoice(match), quality, searchScope });
   const result = await services.sonarr.addLookupAndSearch(match, quality, searchScope);
   logRequest("show_add_search_completed", message, result);
-  await status.edit(formatSonarrResult(result));
+  await handleSonarrSearchResult(status, message.author.id, result, pendingSelections);
 }
 
 async function promptForMovieSelection(
@@ -280,6 +289,48 @@ async function promptForShowSelection(
   await reactWithChoices(message, choices.length);
 }
 
+async function handleSonarrSearchResult(
+  message: Message,
+  requesterId: string,
+  result: SonarrSearchResult,
+  pendingSelections: Map<string, PendingSelection>
+): Promise<void> {
+  if (result.status !== "manual_options") {
+    await message.edit(formatSonarrResult(result));
+    return;
+  }
+
+  await promptForSonarrReleaseSelection(
+    message,
+    requesterId,
+    result.title,
+    result.seasonNumber,
+    result.releases,
+    pendingSelections
+  );
+}
+
+async function promptForSonarrReleaseSelection(
+  message: Message,
+  requesterId: string,
+  title: string,
+  seasonNumber: number,
+  releases: SonarrReleaseOption[],
+  pendingSelections: Map<string, PendingSelection>
+): Promise<void> {
+  const choices = releases.slice(0, MAX_SELECTIONS);
+  await message.edit(formatSonarrReleaseOptions(title, seasonNumber, choices));
+  storePendingSelection(message.id, pendingSelections, {
+    kind: "sonarr_release",
+    requesterId,
+    title,
+    seasonNumber,
+    releases: choices,
+    timeout: createSelectionTimeout(message.id, pendingSelections)
+  });
+  await reactWithChoices(message, choices.length);
+}
+
 async function handleSelectionReaction(
   reaction: MessageReaction | PartialMessageReaction,
   user: User | PartialUser,
@@ -293,7 +344,7 @@ async function handleSelectionReaction(
   if (!pending || user.id !== pending.requesterId) return;
 
   const selectedIndex = NUMBER_REACTIONS.indexOf(fullReaction.emoji.name || "");
-  if (selectedIndex < 0 || selectedIndex >= pending.matches.length) return;
+  if (selectedIndex < 0 || selectedIndex >= pendingSelectionCount(pending)) return;
 
   clearTimeout(pending.timeout);
   pendingSelections.delete(fullReaction.message.id);
@@ -312,6 +363,28 @@ async function handleSelectionReaction(
     return;
   }
 
+  if (pending.kind === "sonarr_release") {
+    const release = pending.releases[selectedIndex];
+    const shouldOverride = !release.downloadAllowed || release.rejections.length > 0;
+    logSelection("sonarr_release_selection_received", fullReaction.message.id, user.id, {
+      selection: selectedIndex + 1,
+      title: pending.title,
+      seasonNumber: pending.seasonNumber,
+      release: formatSonarrReleaseChoice(release),
+      shouldOverride
+    });
+    await fullReaction.message.edit(`Grabbing ${release.title}...`);
+    await services.sonarr.grabRelease(release, shouldOverride);
+    logSelection("sonarr_release_selection_completed", fullReaction.message.id, user.id, {
+      title: pending.title,
+      seasonNumber: pending.seasonNumber,
+      release: formatSonarrReleaseChoice(release),
+      shouldOverride
+    });
+    await fullReaction.message.edit(`${pending.title} - Season ${pending.seasonNumber} sent to the download client!`);
+    return;
+  }
+
   const match = pending.matches[selectedIndex];
   logSelection("show_selection_received", fullReaction.message.id, user.id, {
     selection: selectedIndex + 1,
@@ -322,7 +395,15 @@ async function handleSelectionReaction(
   await fullReaction.message.edit(`Searching for ${formatShowChoice(match)}...`);
   const result = await services.sonarr.addLookupAndSearch(match, pending.quality, pending.searchScope);
   logSelection("show_selection_completed", fullReaction.message.id, user.id, result);
-  await fullReaction.message.edit(formatSonarrResult(result));
+  await handleSonarrSearchResult(fullReaction.message as Message, user.id || pending.requesterId, result, pendingSelections);
+}
+
+function pendingSelectionCount(pending: PendingSelection): number {
+  if (pending.kind === "sonarr_release") {
+    return pending.releases.length;
+  }
+
+  return pending.matches.length;
 }
 
 function storePendingSelection(
@@ -361,6 +442,38 @@ function formatShowChoice(series: SonarrSeriesLookup): string {
   return `${series.title} (${series.year})`;
 }
 
+function formatSonarrReleaseOptions(
+  title: string,
+  seasonNumber: number,
+  releases: SonarrReleaseOption[]
+): string {
+  const rejectedCount = releases.filter((release) => release.rejections.length > 0 || !release.downloadAllowed).length;
+  const options = releases
+    .map((release, index) => `${index + 1}. ${formatSonarrReleaseChoice(release)}`)
+    .join("\n");
+
+  return [
+    `Sonarr found releases for ${title} - Season ${seasonNumber}, but nothing was grabbed automatically.`,
+    rejectedCount > 0
+      ? "React with a number to grab one anyway. Rejected releases will be sent as override grabs."
+      : "React with a number to grab one manually.",
+    options
+  ].join("\n");
+}
+
+function formatSonarrReleaseChoice(release: SonarrReleaseOption): string {
+  const details = [
+    release.quality,
+    release.indexer,
+    formatBytes(release.sizeBytes),
+    release.seeders !== undefined ? `${release.seeders} seeders` : undefined
+  ].filter(Boolean);
+  const rejection = release.rejections[0] ? ` - rejected: ${release.rejections[0]}` : "";
+  const suffix = details.length > 0 ? ` (${details.join(", ")})` : "";
+
+  return trimDiscordLine(`${release.title}${suffix}${rejection}`, 220);
+}
+
 function formatRadarrResult(result: RadarrSearchResult): string {
   if (result.status === "already_exists") {
     return `${result.title} is already on the server!`;
@@ -395,6 +508,23 @@ function formatSonarrResult(result: SonarrSearchResult): string {
   }
 
   return `Unable to find ${title} download`;
+}
+
+function formatBytes(sizeBytes: number | undefined): string | undefined {
+  if (sizeBytes === undefined) return undefined;
+
+  const gib = sizeBytes / 1024 / 1024 / 1024;
+  if (gib >= 1) {
+    return `${gib.toFixed(1)} GiB`;
+  }
+
+  const mib = sizeBytes / 1024 / 1024;
+  return `${mib.toFixed(0)} MiB`;
+}
+
+function trimDiscordLine(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 3)}...`;
 }
 
 function hasReadableContent(message: Message): boolean {

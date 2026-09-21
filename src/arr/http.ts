@@ -28,6 +28,15 @@ export class ArrHttpClient {
     });
   }
 
+  async put<T>(path: string, body: unknown): Promise<T> {
+    const url = this.url(path);
+    return this.request<T>(url, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body)
+    });
+  }
+
   private url(path: string, params?: Record<string, string | number | undefined>): URL {
     const normalizedPath = path.startsWith("/") ? path : `/${path}`;
     const url = new URL(`${this.baseUrl}${normalizedPath}`);

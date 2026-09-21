@@ -48,14 +48,30 @@ type SonarrQueuePage = {
   }>;
 };
 
+type SonarrRawRelease = Record<string, unknown>;
+
 export type SonarrSearchScope =
   | { scope: "full"; monitorWholeShow: true }
   | { scope: "season"; seasonNumber: number; monitorWholeShow: boolean };
+
+export type SonarrReleaseOption = {
+  title: string;
+  guid: string;
+  indexerId: number;
+  indexer?: string;
+  quality?: string;
+  sizeBytes?: number;
+  seeders?: number;
+  rejections: string[];
+  downloadAllowed: boolean;
+  raw: SonarrRawRelease;
+};
 
 export type SonarrSearchResult =
   | { status: "already_exists"; title: string }
   | { status: "unreleased"; title: string; seasonNumber?: number }
   | { status: "found"; title: string; seasonNumber?: number }
+  | { status: "manual_options"; title: string; seasonNumber: number; releases: SonarrReleaseOption[] }
   | { status: "not_found"; title: string; seasonNumber?: number };
 
 export type SonarrRelease = {
@@ -120,7 +136,7 @@ export class SonarrClient {
     const existing = await this.findExistingSeries(match.tvdbId);
 
     if (existing) {
-      return { status: "already_exists", title: existing.title };
+      return this.searchExistingSeries(existing, searchScope);
     }
 
     const qualityProfile = await this.getQualityProfile(qualityProfileName);
@@ -148,11 +164,65 @@ export class SonarrClient {
       });
     }
 
-    const found = await this.pollForSeriesGrab(series.id, startedAt, searchScope);
+    return this.buildSearchResult(series.id, series.title, startedAt, searchScope);
+  }
+
+  private async searchExistingSeries(
+    series: SonarrSeries,
+    searchScope: SonarrSearchScope
+  ): Promise<SonarrSearchResult> {
+    const updatedSeries = await this.updateMonitoredSeasons(series, searchScope);
+    const startedAt = new Date();
+
+    if (searchScope.scope === "full") {
+      await this.http.post("/api/v3/command", {
+        name: "SeriesSearch",
+        seriesId: updatedSeries.id
+      });
+    } else {
+      await this.http.post("/api/v3/command", {
+        name: "SeasonSearch",
+        seriesId: updatedSeries.id,
+        seasonNumber: searchScope.seasonNumber
+      });
+    }
+
+    return this.buildSearchResult(updatedSeries.id, updatedSeries.title, startedAt, searchScope);
+  }
+
+  private async buildSearchResult(
+    seriesId: number,
+    title: string,
+    startedAt: Date,
+    searchScope: SonarrSearchScope
+  ): Promise<SonarrSearchResult> {
+    const found = await this.pollForSeriesGrab(seriesId, startedAt, searchScope);
+    const seasonNumber = searchScope.scope === "season" ? searchScope.seasonNumber : undefined;
+
+    if (found) {
+      return {
+        status: "found",
+        title,
+        seasonNumber
+      };
+    }
+
+    if (searchScope.scope === "season") {
+      const releases = await this.lookupSeasonReleases(seriesId, searchScope.seasonNumber);
+      if (releases.length > 0) {
+        return {
+          status: "manual_options",
+          title,
+          seasonNumber: searchScope.seasonNumber,
+          releases
+        };
+      }
+    }
+
     return {
-      status: found ? "found" : "not_found",
-      title: series.title,
-      seasonNumber: searchScope.scope === "season" ? searchScope.seasonNumber : undefined
+      status: "not_found",
+      title,
+      seasonNumber
     };
   }
 
@@ -191,6 +261,43 @@ export class SonarrClient {
       addOptions: {
         searchForMissingEpisodes: false
       }
+    });
+  }
+
+  private async updateMonitoredSeasons(
+    series: SonarrSeries,
+    searchScope: SonarrSearchScope
+  ): Promise<SonarrSeries> {
+    return this.http.put<SonarrSeries>(`/api/v3/series/${series.id}`, {
+      ...series,
+      monitored: true,
+      seasons: (series.seasons || []).map((season) => ({
+        ...season,
+        monitored: season.monitored || this.shouldMonitorSeason(season.seasonNumber, searchScope)
+      }))
+    });
+  }
+
+  private async lookupSeasonReleases(
+    seriesId: number,
+    seasonNumber: number
+  ): Promise<SonarrReleaseOption[]> {
+    const releases = await this.http.get<SonarrRawRelease[]>("/api/v3/release", {
+      seriesId,
+      seasonNumber
+    });
+
+    return releases
+      .map((release) => this.normalizeRelease(release))
+      .filter((release): release is SonarrReleaseOption => release !== undefined);
+  }
+
+  async grabRelease(release: SonarrReleaseOption, shouldOverride: boolean): Promise<void> {
+    await this.http.post("/api/v3/release", {
+      ...release.raw,
+      guid: release.guid,
+      indexerId: release.indexerId,
+      shouldOverride
     });
   }
 
@@ -251,6 +358,35 @@ export class SonarrClient {
     return seasonNumber === undefined || seasonNumber === searchScope.seasonNumber;
   }
 
+  private normalizeRelease(release: SonarrRawRelease): SonarrReleaseOption | undefined {
+    const nestedRelease = objectValue(release.release);
+    const decision = objectValue(release.decision);
+    const parsedInfo = objectValue(release.parsedInfo);
+
+    const guid = stringValue(release.guid) || stringValue(nestedRelease?.guid);
+    const indexerId = numberValue(release.indexerId) ?? numberValue(nestedRelease?.indexerId);
+    const title = stringValue(release.title) || stringValue(nestedRelease?.title);
+
+    if (!guid || indexerId === undefined || !title) {
+      return undefined;
+    }
+
+    const rejections = stringArrayValue(release.rejections) || stringArrayValue(decision?.rejections) || [];
+
+    return {
+      title,
+      guid,
+      indexerId,
+      indexer: stringValue(release.indexer) || stringValue(nestedRelease?.indexer),
+      quality: qualityName(release.quality) || qualityName(parsedInfo?.quality),
+      sizeBytes: numberValue(release.size) ?? numberValue(nestedRelease?.size),
+      seeders: numberValue(release.seeders) ?? numberValue(nestedRelease?.seeders),
+      rejections,
+      downloadAllowed: booleanValue(release.downloadAllowed) ?? booleanValue(release.approved) ?? rejections.length === 0,
+      raw: release
+    };
+  }
+
   private isUnreleasedSeries(series: SonarrSeriesLookup): boolean {
     if (series.status === "upcoming") {
       return true;
@@ -266,3 +402,36 @@ export class SonarrClient {
 }
 
 const episodeImportEvents = ["episodeFileImported", "downloadFolderImported"];
+
+function objectValue(value: unknown): SonarrRawRelease | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as SonarrRawRelease)
+    : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function stringArrayValue(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function qualityName(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+
+  const quality = objectValue(value);
+  if (!quality) return undefined;
+
+  const nestedQuality = objectValue(quality.quality);
+  return stringValue(quality.name) || stringValue(nestedQuality?.name);
+}

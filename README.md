@@ -27,6 +27,7 @@ If `Full` is omitted and no season is specified, the bot searches season 1 initi
 
 The bot also posts completed movie and show downloads into the configured release channels.
 If a requested movie or show has not released yet, it is still added as monitored and the bot skips the immediate search.
+If Sonarr finds releases for a requested season but does not grab one automatically, the bot lists up to 10 releases in Discord so the requester can pick one to grab manually. Rejected releases are sent to Sonarr as override grabs.
 
 ## Download notifications
 
