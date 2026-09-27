@@ -11,7 +11,8 @@ export class ArrApiError extends Error {
 export class ArrHttpClient {
   constructor(
     private readonly baseUrl: string,
-    private readonly apiKey: string
+    private readonly apiKey: string,
+    private readonly requestTimeoutMs = 30_000
   ) {}
 
   async get<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {
@@ -51,8 +52,10 @@ export class ArrHttpClient {
   }
 
   private async request<T>(url: URL, init: RequestInit): Promise<T> {
+    const signal = AbortSignal.timeout(this.requestTimeoutMs);
     const response = await fetch(url, {
       ...init,
+      signal,
       headers: {
         "x-api-key": this.apiKey,
         ...(init.headers || {})

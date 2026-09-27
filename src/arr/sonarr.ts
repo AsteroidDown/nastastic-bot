@@ -209,6 +209,16 @@ export class SonarrClient {
 
     if (searchScope.scope === "season") {
       const releases = await this.lookupSeasonReleases(seriesId, searchScope.seasonNumber);
+      const autoGrabRelease = releases.find((release) => release.downloadAllowed && release.rejections.length === 0);
+      if (autoGrabRelease) {
+        await this.grabRelease(autoGrabRelease, false);
+        return {
+          status: "found",
+          title,
+          seasonNumber: searchScope.seasonNumber
+        };
+      }
+
       if (releases.length > 0) {
         return {
           status: "manual_options",

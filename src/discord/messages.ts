@@ -53,7 +53,7 @@ type PendingSelection =
     };
 
 const NUMBER_REACTIONS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
-const MAX_SELECTIONS = NUMBER_REACTIONS.length;
+const MAX_SELECTIONS = 5;
 const SELECTION_TTL_MS = 15 * 60 * 1000;
 
 export function createDiscordClient(services: BotServices): Client {
@@ -88,6 +88,7 @@ export function createDiscordClient(services: BotServices): Client {
       await handleSelectionReaction(reaction, user, services, pendingSelections);
     } catch (error) {
       console.error("Failed to handle selection reaction", error);
+      await notifySelectionFailure(reaction);
     }
   });
 
@@ -429,6 +430,18 @@ function createSelectionTimeout(
 async function reactWithChoices(message: Message, count: number): Promise<void> {
   for (const emoji of NUMBER_REACTIONS.slice(0, count)) {
     await message.react(emoji);
+  }
+}
+
+async function notifySelectionFailure(reaction: MessageReaction | PartialMessageReaction): Promise<void> {
+  try {
+    const fullReaction: MessageReaction = reaction.partial ? await reaction.fetch() : reaction;
+    const message = fullReaction.message;
+    if (message.partial) return;
+
+    await sendMessage(message as Message, "Something went wrong while searching that selection.");
+  } catch (error) {
+    console.error("Failed to notify selection failure", error);
   }
 }
 
