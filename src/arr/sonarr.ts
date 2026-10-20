@@ -1,4 +1,5 @@
 import { ArrHttpClient, findQualityProfile, type QualityProfile } from "./http.js";
+import { isApproved, isSeasonPack, isSingleEpisode, releaseSize, type SeasonEpisode } from "./season-planner.js";
 import { sleep } from "../util/sleep.js";
 
 type SonarrSeason = {
@@ -61,6 +62,7 @@ export type SonarrReleaseOption = {
   indexer?: string;
   quality?: string;
   sizeBytes?: number;
+  episodeCount?: number;
   seeders?: number;
   rejections: string[];
   downloadAllowed: boolean;
@@ -68,9 +70,10 @@ export type SonarrReleaseOption = {
 };
 
 export type SonarrSearchResult =
-  | { status: "already_exists"; title: string }
+  | { status: "already_exists"; title: string; seasonNumber?: number }
+  | { status: "partial"; title: string; seasonNumber: number; queuedCount: number; plannedCount: number }
   | { status: "unreleased"; title: string; seasonNumber?: number }
-  | { status: "found"; title: string; seasonNumber?: number }
+  | { status: "found"; title: string; seasonNumber?: number; strategy?: "pack" | "episodes"; downloadCount?: number; sizeBytes?: number }
   | { status: "manual_options"; title: string; seasonNumber: number; releases: SonarrReleaseOption[] }
   | { status: "not_found"; title: string; seasonNumber?: number };
 
@@ -149,20 +152,16 @@ export class SonarrClient {
       };
     }
 
+    if (searchScope.scope === "season") {
+      return this.searchSeason(series.id, series.title, searchScope.seasonNumber);
+    }
+
     const startedAt = new Date();
 
-    if (searchScope.scope === "full") {
-      await this.http.post("/api/v3/command", {
-        name: "SeriesSearch",
-        seriesId: series.id
-      });
-    } else {
-      await this.http.post("/api/v3/command", {
-        name: "SeasonSearch",
-        seriesId: series.id,
-        seasonNumber: searchScope.seasonNumber
-      });
-    }
+    await this.http.post("/api/v3/command", {
+      name: "SeriesSearch",
+      seriesId: series.id
+    });
 
     return this.buildSearchResult(series.id, series.title, startedAt, searchScope);
   }
@@ -172,20 +171,14 @@ export class SonarrClient {
     searchScope: SonarrSearchScope
   ): Promise<SonarrSearchResult> {
     const updatedSeries = await this.updateMonitoredSeasons(series, searchScope);
-    const startedAt = new Date();
-
-    if (searchScope.scope === "full") {
-      await this.http.post("/api/v3/command", {
-        name: "SeriesSearch",
-        seriesId: updatedSeries.id
-      });
-    } else {
-      await this.http.post("/api/v3/command", {
-        name: "SeasonSearch",
-        seriesId: updatedSeries.id,
-        seasonNumber: searchScope.seasonNumber
-      });
+    if (searchScope.scope === "season") {
+      return this.searchSeason(updatedSeries.id, updatedSeries.title, searchScope.seasonNumber);
     }
+    const startedAt = new Date();
+    await this.http.post("/api/v3/command", {
+      name: "SeriesSearch",
+      seriesId: updatedSeries.id
+    });
 
     return this.buildSearchResult(updatedSeries.id, updatedSeries.title, startedAt, searchScope);
   }
@@ -207,33 +200,70 @@ export class SonarrClient {
       };
     }
 
-    if (searchScope.scope === "season") {
-      const releases = await this.lookupSeasonReleases(seriesId, searchScope.seasonNumber);
-      const autoGrabRelease = releases.find((release) => release.downloadAllowed && release.rejections.length === 0);
-      if (autoGrabRelease) {
-        await this.grabRelease(autoGrabRelease, false);
-        return {
-          status: "found",
-          title,
-          seasonNumber: searchScope.seasonNumber
-        };
-      }
-
-      if (releases.length > 0) {
-        return {
-          status: "manual_options",
-          title,
-          seasonNumber: searchScope.seasonNumber,
-          releases
-        };
-      }
-    }
-
     return {
       status: "not_found",
       title,
       seasonNumber
     };
+  }
+
+  private async searchSeason(seriesId: number, title: string, seasonNumber: number): Promise<SonarrSearchResult> {
+    const [allEpisodes, queue] = await Promise.all([
+      this.http.get<SeasonEpisode[]>("/api/v3/episode", { seriesId, seasonNumber }),
+      this.http.get<{ records: Array<{ seriesId?: number; episodeId?: number }>; totalRecords: number }>(
+        "/api/v3/queue", { seriesId, page: 1, pageSize: 1000 })
+    ]);
+    // Do not risk duplicating downloads if we cannot inspect the entire queue.
+    if (queue.totalRecords > queue.records.length) throw new Error("Download queue is too large to safely plan this season.");
+    const episodes = allEpisodes.filter((episode) => episode.seasonNumber === seasonNumber);
+    if (episodes.length === 0) return { status: "not_found", title, seasonNumber };
+    const aired = episodes.filter((episode) => episode.airDateUtc && Date.parse(episode.airDateUtc) <= Date.now());
+    if (aired.length === 0) return { status: "unreleased", title, seasonNumber };
+    const queued = new Set(queue.records.filter((record) => record.seriesId === seriesId).map((record) => record.episodeId));
+    const missing = aired.filter((episode) => !episode.hasFile && !queued.has(episode.id));
+    if (missing.length === 0) {
+      return { status: aired.every((episode) => episode.hasFile) ? "already_exists" : "found", title, seasonNumber };
+    }
+
+    const releases = (await this.lookupSeasonReleases(seriesId, seasonNumber))
+      .filter((release) => isSeasonPack(release, seriesId, seasonNumber))
+      .map((release) => ({ ...release, episodeCount: episodes.length,
+        raw: { ...release.raw, seriesId, episodeIds: episodes.map((episode) => episode.id) } }))
+      .sort((a, b) => Number(isApproved(b)) - Number(isApproved(a)) || releaseSize(a) - releaseSize(b));
+    const individual: SonarrReleaseOption[] = [];
+    // Search sequentially to avoid flooding indexers for long seasons.
+    for (const episode of missing) {
+      const results = await this.http.get<SonarrRawRelease[]>("/api/v3/release", { episodeId: episode.id });
+      const best = results.map((raw) => this.normalizeRelease(raw))
+        .filter((release): release is SonarrReleaseOption => !!release)
+        .filter((release) => isSingleEpisode(release, seriesId, episode) && isApproved(release))
+        .sort((a, b) => releaseSize(a) - releaseSize(b))[0];
+      if (!best) break; // An incomplete episode set cannot compete with a full pack.
+      individual.push(best);
+    }
+    const complete = individual.length === missing.length;
+    const episodeSize = individual.reduce((sum, release) => sum + releaseSize(release), 0);
+    // Packs would redownload existing/queued episodes, or claim to cover unaired episodes.
+    const pack = missing.length === episodes.length ? releases.find(isApproved) : undefined;
+    const useEpisodes = complete && (!pack || episodeSize < releaseSize(pack));
+    const selected = useEpisodes ? individual : pack ? [pack] : [];
+    if (selected.length > 0) {
+      let grabbed = 0;
+      try {
+        for (const release of selected) {
+          await this.grabRelease(release, false);
+          grabbed++;
+        }
+      } catch (error) {
+        console.error(`Season ${seasonNumber} download stopped after ${grabbed}/${selected.length} grabs`, error);
+        return { status: "partial", title, seasonNumber, queuedCount: grabbed, plannedCount: selected.length };
+      }
+      const size = selected.reduce((sum, release) => sum + releaseSize(release), 0);
+      return { status: "found", title, seasonNumber, strategy: useEpisodes ? "episodes" : "pack",
+        downloadCount: selected.length, sizeBytes: Number.isFinite(size) ? size : undefined };
+    }
+    if (releases.length > 0) return { status: "manual_options", title, seasonNumber, releases };
+    return { status: "not_found", title, seasonNumber };
   }
 
   private async findExistingSeries(tvdbId: number): Promise<SonarrSeries | undefined> {

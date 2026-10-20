@@ -469,7 +469,7 @@ function formatSonarrReleaseOptions(
     .join("\n");
 
   return [
-    `Sonarr found releases for ${title} - Season ${seasonNumber}, but nothing was grabbed automatically.`,
+    `Sonarr found season packs for ${title} - Season ${seasonNumber}, but nothing was grabbed automatically.`,
     rejectedCount > 0
       ? "React with a number to grab one anyway. Rejected releases will be sent as override grabs."
       : "React with a number to grab one manually.",
@@ -477,17 +477,23 @@ function formatSonarrReleaseOptions(
   ].join("\n");
 }
 
-function formatSonarrReleaseChoice(release: SonarrReleaseOption): string {
+export function formatSonarrReleaseChoice(release: SonarrReleaseOption): string {
+  const season = /\bS\d{2,}(?=[ .])/i.exec(release.title);
+  const name = season
+    ? `${release.title.slice(0, season.index).replace(/[._]/g, " ").trim()} ${season[0].toUpperCase()}`
+    : release.title;
+  const resolution = /\b(?:480|576|720|1080|2160)p\b/i.exec(release.quality || "")?.[0]
+    ?? /\b(?:480|576|720|1080|2160)p\b/i.exec(release.title)?.[0];
   const details = [
-    release.quality,
-    release.indexer,
+    trimDiscordLine(name, 140),
+    resolution?.toLowerCase(),
     formatBytes(release.sizeBytes),
-    release.seeders !== undefined ? `${release.seeders} seeders` : undefined
+    release.episodeCount && release.sizeBytes
+      ? `~${formatBytes(release.sizeBytes / release.episodeCount)}/episode`
+      : undefined
   ].filter(Boolean);
-  const rejection = release.rejections[0] ? ` - rejected: ${release.rejections[0]}` : "";
-  const suffix = details.length > 0 ? ` (${details.join(", ")})` : "";
 
-  return trimDiscordLine(`${release.title}${suffix}${rejection}`, 220);
+  return details.join(" | ");
 }
 
 function formatRadarrResult(result: RadarrSearchResult): string {
@@ -507,20 +513,28 @@ function formatRadarrResult(result: RadarrSearchResult): string {
 }
 
 function formatSonarrResult(result: SonarrSearchResult): string {
-  if (result.status === "already_exists") {
-    return `${result.title} is already on the server!`;
-  }
-
-  const title = result.seasonNumber
+  const title = result.seasonNumber !== undefined
     ? `${result.title} - Season ${result.seasonNumber}`
     : result.title;
 
+  if (result.status === "already_exists") {
+    return `${title} is already on the server!`;
+  }
+
+  if (result.status === "partial") {
+    return `${title}: queued ${result.queuedCount} of ${result.plannedCount} downloads before a grab failed. Retry the request to search for the remaining episodes.`;
+  }
+
   if (result.status === "found") {
-    return `${title} found!`;
+    const details = result.strategy === "episodes"
+      ? `${result.downloadCount} individual episodes`
+      : result.strategy === "pack" ? "season pack" : undefined;
+    const size = result.sizeBytes ? ` (${formatBytes(result.sizeBytes)} total)` : "";
+    return details ? `${title}: queued ${details}${size}.` : `${title} found!`;
   }
 
   if (result.status === "unreleased") {
-    return `${result.title} hasn't released yet but it is being monitored!`;
+    return `${title} hasn't released yet but it is being monitored!`;
   }
 
   return `Unable to find ${title} download`;

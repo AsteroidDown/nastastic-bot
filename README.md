@@ -27,7 +27,16 @@ If `Full` is omitted and no season is specified, the bot searches season 1 initi
 
 The bot also posts completed movie and show downloads into the configured release channels.
 If a requested movie or show has not released yet, it is still added as monitored and the bot skips the immediate search.
-If Sonarr finds an allowed release for a requested season but does not grab one automatically, the bot grabs it directly. If only rejected releases are available, it lists up to 5 releases in Discord so the requester can pick one to grab manually. Rejected releases are sent to Sonarr as override grabs.
+Season requests compare releases before queuing any downloads:
+
+- Pack candidates must contain the exact requested season token followed by a literal space or period, such as `S01 ` or `S01.`. Single episodes, other seasons, multi-season packs, and conflicting Sonarr metadata are excluded from pack choices.
+- The bot separately searches each missing, aired episode in that season. Only single-episode releases approved by Sonarr can form an automatic episode download set. Existing files and queued episodes are skipped.
+- When all missing episodes have approved releases, the bot compares their combined download size with the smallest approved pack and queues the smaller option. A pack is only queued automatically when the entire season is aired and missing. Every automatic choice must pass Sonarr's current profile and custom-format checks; minimum file size alone does not bypass them.
+- If no complete approved option exists, Discord lists up to 5 matching packs for manual selection, ordered by approval then size. Choices use the compact format `The Ark (2023) S01 | 1080p | 17.1 GiB | ~1.4 GiB/episode`, showing only the title, season, resolution, total size, and estimated average size per episode. Release details, rejection reasons, indexer, seeder count, and quality-profile labels are omitted. Rejected packs require manual selection and are sent as override grabs.
+
+A pack's average size per episode is an estimate, not a measurement of its individual files. The bot does not automatically override a custom-format score rejection based on that average: a score rejection may involve other conditions as well as size. Approved individual episodes can still be downloaded when pack scoring fails. For example, twelve 350 MiB episodes total about 4.1 GiB, so they are preferred over an approved 17.1 GiB pack. No fixed 350 MiB or 1.5 GiB limit is imposed; Sonarr's configured profile decides which releases qualify.
+
+Searches for individual episodes run sequentially to limit load on indexers, so season requests can take longer. An incomplete set is not queued automatically. If a grab fails partway through, the bot reports how many downloads were queued; retrying skips episodes already in Sonarr's queue. Whole-show `Full` requests continue to use Sonarr's standard series search.
 
 ## Download notifications
 
