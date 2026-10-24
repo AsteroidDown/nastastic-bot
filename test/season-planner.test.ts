@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { SonarrClient, type SonarrReleaseOption } from "../src/arr/sonarr.js";
 import { isSeasonPack } from "../src/arr/season-planner.js";
-import { formatSonarrReleaseChoice } from "../src/discord/messages.js";
+import { formatSonarrReleaseChoice, formatSonarrReleaseOptions, formatSonarrResult } from "../src/discord/messages.js";
 
 const GiB = 1024 ** 3;
 function rawRelease(title: string, size: number, extra: Record<string, unknown> = {}) {
@@ -56,10 +56,13 @@ type Scenario = {
   existingFirst?: boolean;
   queuedFirst?: boolean;
   noPacks?: boolean;
+  failEpisode?: number;
+  transientFailure?: boolean;
 };
 async function runScenario(t: TestContext, scenario: Scenario = {}) {
   const posts: Array<{ path: string; body: Record<string, unknown> }> = [];
   const searches: string[] = [];
+  const episodeAttempts = new Map<number, number>();
   const episodes = [1, 2, 3].map((n) => ({ id: n, seasonNumber: 1, episodeNumber: n,
     hasFile: scenario.existingFirst && n === 1, airDateUtc: "2023-01-01T00:00:00Z" }));
   const pack = rawRelease("The Ark S01 1080p", scenario.packSize ?? 17.1 * GiB,
@@ -79,6 +82,11 @@ async function runScenario(t: TestContext, scenario: Scenario = {}) {
       searches.push(url.search);
       const episodeId = Number(url.searchParams.get("episodeId"));
       if (episodeId) {
+        const attempt = (episodeAttempts.get(episodeId) || 0) + 1;
+        episodeAttempts.set(episodeId, attempt);
+        if (episodeId === scenario.failEpisode && (!scenario.transientFailure || attempt === 1)) {
+          throw new TypeError("fetch failed", { cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }) });
+        }
         const size = scenario.episodeSizes ? scenario.episodeSizes[episodeId - 1] : 350 * 1024 ** 2;
         return Response.json(size === undefined ? [] : [
           rawRelease(`The Ark S01E0${episodeId} 1080p`, size,
@@ -96,7 +104,7 @@ async function runScenario(t: TestContext, scenario: Scenario = {}) {
   const client = new SonarrClient("http://sonarr.test", "test", "/shows", "standard", 1, 1);
   const result = await client.addLookupAndSearch({ title: "The Ark", tvdbId: 42, year: 2023, titleSlug: "the-ark" },
     "HD 1080p", { scope: "season", seasonNumber: 1, monitorWholeShow: false });
-  return { result, posts, searches };
+  return { result, posts, searches, episodeAttempts };
 }
 
 test("chooses the smaller complete approved episode set before Sonarr can auto-grab a large pack", async (t) => {
@@ -146,4 +154,35 @@ test("does not queue an incomplete collection if no valid pack is available", as
   const { result, posts } = await runScenario(t, { noPacks: true, episodeSizes: [100, undefined, 100] });
   assert.equal(result.status, "not_found");
   assert.equal(posts.length, 0);
+});
+
+
+test("a closed episode-search socket is retried once and a successful retry completes the comparison", async (t) => {
+  t.mock.method(console, "warn", () => {});
+  const { result, posts, episodeAttempts } = await runScenario(t, { failEpisode: 1, transientFailure: true });
+  assert.equal(episodeAttempts.get(1), 2);
+  assert.equal(result.status === "found" && result.strategy, "episodes");
+  assert.equal(posts.length, 3);
+});
+
+test("repeated socket failure preserves compact pack choices without auto-downloading an un-compared pack", async (t) => {
+  t.mock.method(console, "warn", () => {});
+  const { result, posts, episodeAttempts } = await runScenario(t, { failEpisode: 2 });
+  assert.equal(episodeAttempts.get(2), 2);
+  assert.equal(posts.length, 0);
+  assert.equal(result.status, "manual_options");
+  if (result.status !== "manual_options") return;
+  assert.equal(result.comparisonUnavailable, true);
+  assert.equal(result.releases.length, 1);
+  const message = formatSonarrReleaseOptions(result.title, result.seasonNumber, result.releases, result.comparisonUnavailable);
+  assert.match(message, /couldn't compare download sizes/);
+  assert.match(message, /1\. The Ark S01 \| 1080p \| 17.1 GiB \| ~5.7 GiB\/episode/);
+});
+
+test("connection failure without a valid pack is reported as an incomplete search, not no episode results", async (t) => {
+  t.mock.method(console, "warn", () => {});
+  const { result, posts } = await runScenario(t, { failEpisode: 1, noPacks: true });
+  assert.equal(posts.length, 0);
+  assert.equal(result.status, "search_failed");
+  assert.match(formatSonarrResult(result), /couldn't finish the episode search/);
 });

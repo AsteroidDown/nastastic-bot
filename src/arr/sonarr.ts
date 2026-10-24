@@ -1,4 +1,4 @@
-import { ArrHttpClient, findQualityProfile, type QualityProfile } from "./http.js";
+import { ArrHttpClient, ArrApiError, ArrRequestError, findQualityProfile, type QualityProfile } from "./http.js";
 import { isApproved, isSeasonPack, isSingleEpisode, releaseSize, type SeasonEpisode } from "./season-planner.js";
 import { sleep } from "../util/sleep.js";
 
@@ -71,10 +71,11 @@ export type SonarrReleaseOption = {
 
 export type SonarrSearchResult =
   | { status: "already_exists"; title: string; seasonNumber?: number }
+  | { status: "search_failed"; title: string; seasonNumber: number }
   | { status: "partial"; title: string; seasonNumber: number; queuedCount: number; plannedCount: number }
   | { status: "unreleased"; title: string; seasonNumber?: number }
   | { status: "found"; title: string; seasonNumber?: number; strategy?: "pack" | "episodes"; downloadCount?: number; sizeBytes?: number }
-  | { status: "manual_options"; title: string; seasonNumber: number; releases: SonarrReleaseOption[] }
+  | { status: "manual_options"; title: string; seasonNumber: number; releases: SonarrReleaseOption[]; comparisonUnavailable?: boolean }
   | { status: "not_found"; title: string; seasonNumber?: number };
 
 export type SonarrRelease = {
@@ -231,9 +232,18 @@ export class SonarrClient {
         raw: { ...release.raw, seriesId, episodeIds: episodes.map((episode) => episode.id) } }))
       .sort((a, b) => Number(isApproved(b)) - Number(isApproved(a)) || releaseSize(a) - releaseSize(b));
     const individual: SonarrReleaseOption[] = [];
+    let comparisonUnavailable = false;
     // Search sequentially to avoid flooding indexers for long seasons.
     for (const episode of missing) {
-      const results = await this.http.get<SonarrRawRelease[]>("/api/v3/release", { episodeId: episode.id });
+      let results: SonarrRawRelease[];
+      try {
+        results = await this.http.get<SonarrRawRelease[]>("/api/v3/release", { episodeId: episode.id }, Math.max(30_000, this.timeoutMs));
+      } catch (error) {
+        if (!(error instanceof ArrRequestError || error instanceof ArrApiError)) throw error;
+        console.warn(`Episode comparison failed for series ${seriesId}, season ${seasonNumber}, episode ${episode.episodeNumber}; preserving pack choices.`, error);
+        comparisonUnavailable = true;
+        break;
+      }
       const best = results.map((raw) => this.normalizeRelease(raw))
         .filter((release): release is SonarrReleaseOption => !!release)
         .filter((release) => isSingleEpisode(release, seriesId, episode) && isApproved(release))
@@ -244,7 +254,7 @@ export class SonarrClient {
     const complete = individual.length === missing.length;
     const episodeSize = individual.reduce((sum, release) => sum + releaseSize(release), 0);
     // Packs would redownload existing/queued episodes, or claim to cover unaired episodes.
-    const pack = missing.length === episodes.length ? releases.find(isApproved) : undefined;
+    const pack = !comparisonUnavailable && missing.length === episodes.length ? releases.find(isApproved) : undefined;
     const useEpisodes = complete && (!pack || episodeSize < releaseSize(pack));
     const selected = useEpisodes ? individual : pack ? [pack] : [];
     if (selected.length > 0) {
@@ -262,7 +272,8 @@ export class SonarrClient {
       return { status: "found", title, seasonNumber, strategy: useEpisodes ? "episodes" : "pack",
         downloadCount: selected.length, sizeBytes: Number.isFinite(size) ? size : undefined };
     }
-    if (releases.length > 0) return { status: "manual_options", title, seasonNumber, releases };
+    if (releases.length > 0) return { status: "manual_options", title, seasonNumber, releases, comparisonUnavailable };
+    if (comparisonUnavailable) return { status: "search_failed", title, seasonNumber };
     return { status: "not_found", title, seasonNumber };
   }
 
@@ -325,7 +336,7 @@ export class SonarrClient {
     const releases = await this.http.get<SonarrRawRelease[]>("/api/v3/release", {
       seriesId,
       seasonNumber
-    });
+    }, Math.max(30_000, this.timeoutMs));
 
     return releases
       .map((release) => this.normalizeRelease(release))

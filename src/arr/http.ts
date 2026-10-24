@@ -1,3 +1,5 @@
+import { sleep } from "../util/sleep.js";
+
 export class ArrApiError extends Error {
   constructor(
     message: string,
@@ -8,6 +10,23 @@ export class ArrApiError extends Error {
   }
 }
 
+export class ArrRequestError extends Error {
+  constructor(
+    public readonly method: string,
+    public readonly path: string,
+    public readonly kind: "timeout" | "connection",
+    cause: unknown
+  ) {
+    super(`ARR ${method} ${path}: ${kind === "timeout" ? "request timed out" : "connection failed"}`, { cause });
+  }
+}
+
+function isRetryableConnectionError(error: unknown): boolean {
+  const failure = error as { code?: string; cause?: { code?: string } } | undefined;
+  const code = failure?.cause?.code ?? failure?.code;
+  return code === "UND_ERR_SOCKET" || code === "ECONNRESET" || code === "EPIPE";
+}
+
 export class ArrHttpClient {
   constructor(
     private readonly baseUrl: string,
@@ -15,9 +34,9 @@ export class ArrHttpClient {
     private readonly requestTimeoutMs = 30_000
   ) {}
 
-  async get<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {
+  async get<T>(path: string, params?: Record<string, string | number | undefined>, timeoutMs = this.requestTimeoutMs): Promise<T> {
     const url = this.url(path, params);
-    return this.request<T>(url, { method: "GET" });
+    return this.request<T>(url, { method: "GET" }, timeoutMs);
   }
 
   async post<T>(path: string, body: unknown): Promise<T> {
@@ -51,27 +70,37 @@ export class ArrHttpClient {
     return url;
   }
 
-  private async request<T>(url: URL, init: RequestInit): Promise<T> {
-    const signal = AbortSignal.timeout(this.requestTimeoutMs);
-    const response = await fetch(url, {
-      ...init,
-      signal,
-      headers: {
-        "x-api-key": this.apiKey,
-        ...(init.headers || {})
+  private async request<T>(url: URL, init: RequestInit, timeoutMs = this.requestTimeoutMs): Promise<T> {
+    const method = init.method || "GET";
+    // Retrying a grab could queue it twice. Only read requests may be retried.
+    for (let attempt = 0; ; attempt++) {
+      const signal = AbortSignal.timeout(timeoutMs);
+      try {
+        const response = await fetch(url, {
+          ...init,
+          signal,
+          headers: {
+            "x-api-key": this.apiKey,
+            ...(init.headers || {})
+          }
+        });
+
+        if (!response.ok) {
+          const body = await response.text();
+          throw new ArrApiError(`ARR ${method} ${url.pathname} failed: HTTP ${response.status}`, response.status, body);
+        }
+        if (response.status === 204) return undefined as T;
+        return await response.json() as T;
+      } catch (error) {
+        if (error instanceof ArrApiError || error instanceof SyntaxError) throw error;
+        if (method === "GET" && attempt === 0 && !signal.aborted && isRetryableConnectionError(error)) {
+          console.warn(`ARR GET ${url.pathname}: connection interrupted; retrying once.`);
+          await sleep(250);
+          continue;
+        }
+        throw new ArrRequestError(method, url.pathname, signal.aborted ? "timeout" : "connection", error);
       }
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new ArrApiError(`ARR API request failed: ${response.status}`, response.status, body);
     }
-
-    if (response.status === 204) {
-      return undefined as T;
-    }
-
-    return response.json() as Promise<T>;
   }
 }
 

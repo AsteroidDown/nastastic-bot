@@ -19,6 +19,7 @@ import {
   type SonarrSearchScope,
   type SonarrSeriesLookup
 } from "../arr/sonarr.js";
+import { ArrApiError, ArrRequestError } from "../arr/http.js";
 import { parseMovieRequest, parseShowRequest } from "../parsing/requests.js";
 
 type BotServices = {
@@ -78,7 +79,7 @@ export function createDiscordClient(services: BotServices): Client {
     } catch (error) {
       console.error("Failed to handle message", error);
       if (!message.author.bot) {
-        await safeReply(message, "Something went wrong while processing that request.");
+        await safeReply(message, formatRequestFailure(error));
       }
     }
   });
@@ -88,7 +89,7 @@ export function createDiscordClient(services: BotServices): Client {
       await handleSelectionReaction(reaction, user, services, pendingSelections);
     } catch (error) {
       console.error("Failed to handle selection reaction", error);
-      await notifySelectionFailure(reaction);
+      await notifySelectionFailure(reaction, error);
     }
   });
 
@@ -307,7 +308,8 @@ async function handleSonarrSearchResult(
     result.title,
     result.seasonNumber,
     result.releases,
-    pendingSelections
+    pendingSelections,
+    result.comparisonUnavailable
   );
 }
 
@@ -317,10 +319,11 @@ async function promptForSonarrReleaseSelection(
   title: string,
   seasonNumber: number,
   releases: SonarrReleaseOption[],
-  pendingSelections: Map<string, PendingSelection>
+  pendingSelections: Map<string, PendingSelection>,
+  comparisonUnavailable = false
 ): Promise<void> {
   const choices = releases.slice(0, MAX_SELECTIONS);
-  const prompt = await sendMessage(message, formatSonarrReleaseOptions(title, seasonNumber, choices));
+  const prompt = await sendMessage(message, formatSonarrReleaseOptions(title, seasonNumber, choices, comparisonUnavailable));
   storePendingSelection(prompt.id, pendingSelections, {
     kind: "sonarr_release",
     requesterId,
@@ -433,16 +436,28 @@ async function reactWithChoices(message: Message, count: number): Promise<void> 
   }
 }
 
-async function notifySelectionFailure(reaction: MessageReaction | PartialMessageReaction): Promise<void> {
+async function notifySelectionFailure(reaction: MessageReaction | PartialMessageReaction, error: unknown): Promise<void> {
   try {
     const fullReaction: MessageReaction = reaction.partial ? await reaction.fetch() : reaction;
     const message = fullReaction.message;
     if (message.partial) return;
 
-    await sendMessage(message as Message, "Something went wrong while searching that selection.");
+    await sendMessage(message as Message, formatRequestFailure(error));
   } catch (error) {
     console.error("Failed to notify selection failure", error);
   }
+}
+
+export function formatRequestFailure(error: unknown): string {
+  if (error instanceof ArrRequestError) {
+    return error.kind === "timeout"
+      ? "The media server took too long to respond. Please retry the request."
+      : "The connection to the media server was interrupted. Please retry the request.";
+  }
+  if (error instanceof ArrApiError) {
+    return `The media server couldn't complete that request${error.status ? ` (HTTP ${error.status})` : ""}. Please check the bot logs and retry.`;
+  }
+  return "Something went wrong while processing that request.";
 }
 
 function formatNearMatches(matches: string[]): string {
@@ -458,10 +473,11 @@ function formatShowChoice(series: SonarrSeriesLookup): string {
   return `${series.title} (${series.year})`;
 }
 
-function formatSonarrReleaseOptions(
+export function formatSonarrReleaseOptions(
   title: string,
   seasonNumber: number,
-  releases: SonarrReleaseOption[]
+  releases: SonarrReleaseOption[],
+  comparisonUnavailable = false
 ): string {
   const rejectedCount = releases.filter((release) => release.rejections.length > 0 || !release.downloadAllowed).length;
   const options = releases
@@ -469,7 +485,9 @@ function formatSonarrReleaseOptions(
     .join("\n");
 
   return [
-    `Sonarr found season packs for ${title} - Season ${seasonNumber}, but nothing was grabbed automatically.`,
+    comparisonUnavailable
+      ? `The episode search for ${title} - Season ${seasonNumber} failed, so I couldn't compare download sizes. Available season packs are listed below.`
+      : `Sonarr found season packs for ${title} - Season ${seasonNumber}, but nothing was grabbed automatically.`,
     rejectedCount > 0
       ? "React with a number to grab one anyway. Rejected releases will be sent as override grabs."
       : "React with a number to grab one manually.",
@@ -512,13 +530,17 @@ function formatRadarrResult(result: RadarrSearchResult): string {
   return `Unable to find ${result.title} download`;
 }
 
-function formatSonarrResult(result: SonarrSearchResult): string {
+export function formatSonarrResult(result: SonarrSearchResult): string {
   const title = result.seasonNumber !== undefined
     ? `${result.title} - Season ${result.seasonNumber}`
     : result.title;
 
   if (result.status === "already_exists") {
     return `${title} is already on the server!`;
+  }
+
+  if (result.status === "search_failed") {
+    return `I couldn't finish the episode search for ${title}, and no matching season packs were found. Please retry the request.`;
   }
 
   if (result.status === "partial") {
